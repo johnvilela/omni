@@ -2,9 +2,64 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestPairReplyRateLimit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	now := time.Now()
+
+	for i := 1; i <= pairReplyLimit; i++ {
+		if !srv.allowPairReply(5, now) {
+			t.Fatalf("reply %d blocked, want the first %d allowed", i, pairReplyLimit)
+		}
+	}
+	if srv.allowPairReply(5, now) {
+		t.Fatal("reply over the limit allowed")
+	}
+
+	// other senders are unaffected; the window resets the count
+	if !srv.allowPairReply(6, now) {
+		t.Fatal("other sender blocked")
+	}
+	if !srv.allowPairReply(5, now.Add(pairReplyWindow)) {
+		t.Fatal("sender still blocked after the window passed")
+	}
+}
+
+func TestPairingGateRateLimited(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := context.Background()
+
+	for i := 1; i <= pairReplyLimit; i++ {
+		if reply := srv.gatedAnswer(ctx, 77, "hi"); reply == "" {
+			t.Fatalf("reply %d empty, want the first %d answered", i, pairReplyLimit)
+		}
+	}
+	if reply := srv.gatedAnswer(ctx, 77, "hi"); reply != "" {
+		t.Fatalf("rate-limited sender still answered: %q", reply)
+	}
+}
+
+func TestPairingGatePendingCap(t *testing.T) {
+	srv, store := newTestServer(t)
+	for i := 0; i < maxPendingPairings; i++ {
+		if err := store.AddPairing("telegram", fmt.Sprint(1000+i), newPairingCode()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reply := srv.gatedAnswer(context.Background(), 77, "hi")
+	if !strings.Contains(reply, "try again later") {
+		t.Fatalf("at the cap, want a busy notice, got:\n%s", reply)
+	}
+	if _, ok, _ := store.Pairing("telegram", "77"); ok {
+		t.Fatal("pairing row created past the cap")
+	}
+}
 
 func TestPairingGate(t *testing.T) {
 	srv, store := newTestServer(t)

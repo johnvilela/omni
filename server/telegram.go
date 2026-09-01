@@ -134,6 +134,9 @@ func (t *Telegram) Poll(ctx context.Context) {
 			stop := t.typing(ctx, u.Message.Chat.ID)
 			reply := t.answer(ctx, from, u.Message.Text)
 			stop()
+			if reply == "" {
+				continue // silence (e.g. a rate-limited unpaired sender)
+			}
 			err := t.call(ctx, "sendMessage", map[string]any{
 				"chat_id": u.Message.Chat.ID,
 				"text":    reply,

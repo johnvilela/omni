@@ -82,6 +82,12 @@ func (s *Store) ApprovePairing(channel, code string) (string, error) {
 	return id, err
 }
 
+func (s *Store) PendingPairings(channel string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pairings WHERE channel = ? AND approved = 0`, channel).Scan(&n)
+	return n, err
+}
+
 func (s *Store) Pairings(channel string) ([]Pairing, error) {
 	rows, err := s.db.Query(`SELECT user_id, code, approved FROM pairings WHERE channel = ? ORDER BY user_id`, channel)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 )
 
 // Pairing is one chat user's pairing state for a channel.
@@ -13,6 +14,43 @@ type Pairing struct {
 	UserID   string `json:"user_id"`
 	Code     string `json:"code"`
 	Approved bool   `json:"approved"`
+}
+
+const (
+	pairReplyLimit     = 3                // unpaired replies per sender per window
+	pairReplyWindow    = 10 * time.Minute // then silence until the window passes
+	maxPendingPairings = 50               // cap on rows a many-account flood can create
+)
+
+type pairHit struct {
+	count int
+	since time.Time
+}
+
+// allowPairReply counts this unpaired sender's attempt and reports whether
+// they may still get a reply. In-memory: a restart resets it, which is fine
+// for abuse throttling.
+func (s *Server) allowPairReply(fromID int64, now time.Time) bool {
+	s.pairMu.Lock()
+	defer s.pairMu.Unlock()
+	if s.pairHits == nil {
+		s.pairHits = map[int64]*pairHit{}
+	}
+	// ponytail: lazy sweep bounds the map under many-account floods
+	if len(s.pairHits) >= 1000 {
+		for k, h := range s.pairHits {
+			if now.Sub(h.since) >= pairReplyWindow {
+				delete(s.pairHits, k)
+			}
+		}
+	}
+	h := s.pairHits[fromID]
+	if h == nil || now.Sub(h.since) >= pairReplyWindow {
+		s.pairHits[fromID] = &pairHit{count: 1, since: now}
+		return true
+	}
+	h.count++
+	return h.count <= pairReplyLimit
 }
 
 // codeAlphabet avoids ambiguous characters (0/O, 1/I/L).
@@ -40,7 +78,16 @@ func (s *Server) gatedAnswer(ctx context.Context, fromID int64, text string) str
 	if ok && p.Approved {
 		return s.answerNotice(ctx, text)
 	}
+	if !s.allowPairReply(fromID, time.Now()) {
+		return "" // rate-limited: the poller sends nothing
+	}
 	if !ok {
+		if n, err := s.store.PendingPairings("telegram"); err != nil {
+			log.Printf("pairing: %v", err)
+			return "⚠ internal error, try again"
+		} else if n >= maxPendingPairings {
+			return "⚠ pairing is busy — try again later"
+		}
 		code := newPairingCode()
 		if err := s.store.AddPairing("telegram", id, code); err != nil {
 			log.Printf("pairing: %v", err)

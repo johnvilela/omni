@@ -22,6 +22,9 @@ type Server struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	botUser string
+
+	pairMu   sync.Mutex
+	pairHits map[int64]*pairHit
 }
 
 func NewServer(store *Store, telegramAPIBase string) *Server {

@@ -46,6 +46,29 @@ func fakeTelegram(t *testing.T, sent chan<- map[string]any, actions chan<- map[s
 	return httptest.NewServer(mux)
 }
 
+func TestTelegramPollSkipsEmptyReply(t *testing.T) {
+	sent := make(chan map[string]any, 1)
+	srv := fakeTelegram(t, sent, nil)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tg := NewTelegram(srv.URL, "TOKEN")
+	answered := make(chan struct{})
+	tg.answer = func(context.Context, int64, string) string {
+		close(answered)
+		return "" // rate-limited senders get silence, not an empty sendMessage
+	}
+	go tg.Poll(ctx)
+
+	<-answered
+	select {
+	case body := <-sent:
+		t.Fatalf("sendMessage called with %v, want none for an empty reply", body)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
 func TestTelegramGetMe(t *testing.T) {
 	srv := fakeTelegram(t, nil, nil)
 	defer srv.Close()
