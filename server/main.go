@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 )
 
-// app identity, overridable at build time via -ldflags -X so a dev install
-// (omni-dev, :8788) can coexist with prod without sharing port, config or db.
+// app and defaultAddr are overridable at build time via -ldflags -X so a dev
+// install (omni-dev, :8788) can coexist with prod without sharing port,
+// config or db. version belongs to the server alone — bump it when the
+// server changes; the cli has its own.
 var (
 	app         = "omni"
 	defaultAddr = ":8787"
-	version     = "dev"
+	version     = "v0.1.0"
 )
 
 func dbPath() string {

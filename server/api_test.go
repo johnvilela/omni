@@ -66,7 +66,7 @@ func doJSON(t *testing.T, h http.Handler, method, path, body string) (int, map[s
 func TestStatusEndpoint(t *testing.T) {
 	srv, _ := newTestServer(t)
 	code, obj, _ := doJSON(t, srv.Handler(), "GET", "/status", "")
-	if code != 200 || obj["app"] != "omni" || obj["version"] != "dev" {
+	if code != 200 || obj["app"] != "omni" || obj["version"] != version {
 		t.Fatalf("GET /status = %d, %v; want 200 with app and version", code, obj)
 	}
 }

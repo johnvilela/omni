@@ -11,9 +11,10 @@ cd "$(dirname "$0")/.."
 APP="${APP:-omni}"
 ADDR="${ADDR:-:8787}"
 OUT="${OUT:-bin}"
-VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo unknown)"
 
-X="-X main.app=$APP -X main.defaultAddr=$ADDR -X main.version=$VERSION"
+# versions are NOT stamped here: each binary carries its own hand-bumped
+# version var (cli/main.go and server/main.go)
+X="-X main.app=$APP -X main.defaultAddr=$ADDR"
 FLAGS=()
 LDFLAGS="$X"
 if [[ "${PROD:-}" == "1" ]]; then
@@ -24,4 +25,4 @@ fi
 mkdir -p "$OUT"
 go build "${FLAGS[@]}" -ldflags "$LDFLAGS" -o "$OUT/$APP" ./cli
 go build "${FLAGS[@]}" -ldflags "$LDFLAGS" -o "$OUT/$APP-server" ./server
-echo "built $OUT/$APP and $OUT/$APP-server ($VERSION)"
+echo "built $OUT/$APP and $OUT/$APP-server"

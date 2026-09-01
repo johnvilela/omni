@@ -24,13 +24,8 @@ func renderStatus(st ServerStatus, chs []Channel) string {
 	for _, ch := range chs {
 		s += "  " + renderChannel(ch) + "\n"
 	}
-	s += "\n" + titleStyle.Render("  ALERTS") + "\n\n"
-	if st.Version != version {
-		s += "  " + warnStyle.Render("!") + " version mismatch: cli " + version +
-			", server " + st.Version + " — rebuild the older one\n\n"
-	} else {
-		s += dimStyle.Render("  no alerts") + "\n\n"
-	}
+	s += "\n" + titleStyle.Render("  ALERTS") + "\n\n" +
+		dimStyle.Render("  no alerts") + "\n\n"
 	return s
 }
 

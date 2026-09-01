@@ -89,28 +89,22 @@ func TestSaveToken(t *testing.T) {
 func TestRenderStatus(t *testing.T) {
 	chs := []Channel{{Name: "telegram", Connected: true, BotUsername: "omni_bot"}}
 
-	// server version matches the CLI's own (version = "dev" in tests)
-	up := renderStatus(ServerStatus{Version: "dev"}, chs)
-	for _, want := range []string{"up", "dev", "telegram", "no alerts"} {
-		if !strings.Contains(up, want) {
-			t.Errorf("status (match) missing %q in:\n%s", want, up)
+	// server version differs from the CLI's — that's normal, versions are
+	// per-service, so no mismatch alert may fire
+	out := renderStatus(ServerStatus{Version: "v9.9.9"}, chs)
+	for _, want := range []string{"up", "v9.9.9", "telegram", "no alerts"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status missing %q in:\n%s", want, out)
 		}
 	}
-
-	mismatch := renderStatus(ServerStatus{Version: "other"}, chs)
-	for _, want := range []string{"version mismatch", "other", "dev"} {
-		if !strings.Contains(mismatch, want) {
-			t.Errorf("status (mismatch) missing %q in:\n%s", want, mismatch)
-		}
-	}
-	if strings.Contains(mismatch, "no alerts") {
-		t.Error("status (mismatch) should not say no alerts")
+	if strings.Contains(out, "mismatch") {
+		t.Error("differing versions must not raise an alert")
 	}
 }
 
 func TestHelpScreens(t *testing.T) {
 	root := helpText()
-	for _, want := range []string{"omni channels", "omni status", "--help", "-server"} {
+	for _, want := range []string{"omni channels", "omni status", "--help", "-server", "cli " + version} {
 		if !strings.Contains(root, want) {
 			t.Errorf("root help missing %q", want)
 		}

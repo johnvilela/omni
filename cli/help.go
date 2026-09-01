@@ -22,7 +22,7 @@ func helpText() string {
 	bannerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 
 	return bannerStyle.Render(banner) + "\n" +
-		dimStyle.Render("  a simplified, self-hosted messaging hub · "+version) + "\n\n" +
+		dimStyle.Render("  a simplified, self-hosted messaging hub · cli "+version) + "\n\n" +
 		titleStyle.Render("  COMMANDS") + "\n\n" +
 		row("omni status", "server, channels and alerts at a glance") +
 		row("omni channels", "manage message channels") +
@@ -36,8 +36,7 @@ func helpText() string {
 func helpStatus() string {
 	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
 		"      " + cmdStyle.Render("omni status") + "\n\n" +
-		"      server, channels and alerts at a glance\n" +
-		helpStyle.Render("      alerts warn when the cli and server versions differ") + "\n\n"
+		"      server, channels and alerts at a glance\n\n"
 }
 
 func helpChannels() string {
