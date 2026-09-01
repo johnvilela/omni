@@ -19,19 +19,21 @@ for arg in "$@"; do
 done
 
 BIN="$HOME/.local/bin"
-UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omni-server.service"
 apps=(omni omni-dev)
 if [[ $DEV_ONLY == 1 ]]; then
   apps=(omni-dev)
 fi
 
-# prod server runs as a service; dev has none
-if [[ $DEV_ONLY == 0 && -f "$UNIT" ]]; then
-  systemctl --user disable --now omni-server.service 2>/dev/null || true
-  rm -f "$UNIT"
-  systemctl --user daemon-reload
-  echo "removed service omni-server"
-fi
+# both prod and dev run as systemd user services ($app-server.service)
+for a in "${apps[@]}"; do
+  unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$a-server.service"
+  if [[ -f "$unit" ]]; then
+    systemctl --user disable --now "$a-server.service" 2>/dev/null || true
+    rm -f "$unit"
+    systemctl --user daemon-reload
+    echo "removed service $a-server"
+  fi
+done
 
 for a in "${apps[@]}"; do
   for f in "$BIN/$a" "$BIN/$a-server"; do
