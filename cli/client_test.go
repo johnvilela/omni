@@ -10,6 +10,9 @@ import (
 
 func fakeServer() *httptest.Server {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"app":"omni","version":"v1.2.3"}`)
+	})
 	mux.HandleFunc("GET /channels", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `[{"name":"telegram","connected":true,"bot_username":"omni_bot"}]`)
 	})
@@ -21,6 +24,17 @@ func fakeServer() *httptest.Server {
 		fmt.Fprint(w, `{"error":"token_required"}`)
 	})
 	return httptest.NewServer(mux)
+}
+
+func TestClientStatus(t *testing.T) {
+	srv := fakeServer()
+	defer srv.Close()
+	c := NewClient(srv.URL)
+
+	st, err := c.Status()
+	if err != nil || st.App != "omni" || st.Version != "v1.2.3" {
+		t.Fatalf("Status = %v, %v", st, err)
+	}
 }
 
 func TestClientChannels(t *testing.T) {

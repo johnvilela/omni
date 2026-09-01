@@ -24,12 +24,20 @@ func helpText() string {
 	return bannerStyle.Render(banner) + "\n" +
 		dimStyle.Render("  a simplified, self-hosted messaging hub · "+version) + "\n\n" +
 		titleStyle.Render("  COMMANDS") + "\n\n" +
+		row("omni status", "server, channels and alerts at a glance") +
 		row("omni channels", "manage message channels") +
 		row("omni help", "show this help (also: omni --help, omni -h)") +
 		"\n" + helpStyle.Render("      run `omni <command> --help` for flags, subcommands and examples") + "\n" +
 		"\n" + titleStyle.Render("  SERVER") + "\n\n" +
 		"      start it with " + cmdStyle.Render(app+"-server") + "\n" +
 		"      " + helpStyle.Render("listens on "+defaultAddr+" — override with OMNI_ADDR") + "\n\n"
+}
+
+func helpStatus() string {
+	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
+		"      " + cmdStyle.Render("omni status") + "\n\n" +
+		"      server, channels and alerts at a glance\n" +
+		helpStyle.Render("      alerts warn when the cli and server versions differ") + "\n\n"
 }
 
 func helpChannels() string {

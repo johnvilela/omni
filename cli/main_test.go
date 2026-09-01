@@ -29,6 +29,10 @@ func TestRoute(t *testing.T) {
 		{[]string{"channels", "connect", "-c", "telegram"}, "connect", "telegram", "", false},
 		{[]string{"channels", "connect", "--help"}, "help", "", "connect", false},
 		{[]string{"channels", "connect", "-c", "telegram", "-h"}, "help", "", "connect", false},
+		{[]string{"status"}, "status", "", "", false},
+		{[]string{"status", "--help"}, "help", "", "status", false},
+		{[]string{"status", "-h"}, "help", "", "status", false},
+		{[]string{"status", "junk"}, "", "", "", true},
 		{[]string{"frobnicate"}, "", "", "", true},
 	}
 	for _, c := range cases {
@@ -82,9 +86,31 @@ func TestSaveToken(t *testing.T) {
 	}
 }
 
+func TestRenderStatus(t *testing.T) {
+	chs := []Channel{{Name: "telegram", Connected: true, BotUsername: "omni_bot"}}
+
+	// server version matches the CLI's own (version = "dev" in tests)
+	up := renderStatus(ServerStatus{Version: "dev"}, chs)
+	for _, want := range []string{"up", "dev", "telegram", "no alerts"} {
+		if !strings.Contains(up, want) {
+			t.Errorf("status (match) missing %q in:\n%s", want, up)
+		}
+	}
+
+	mismatch := renderStatus(ServerStatus{Version: "other"}, chs)
+	for _, want := range []string{"version mismatch", "other", "dev"} {
+		if !strings.Contains(mismatch, want) {
+			t.Errorf("status (mismatch) missing %q in:\n%s", want, mismatch)
+		}
+	}
+	if strings.Contains(mismatch, "no alerts") {
+		t.Error("status (mismatch) should not say no alerts")
+	}
+}
+
 func TestHelpScreens(t *testing.T) {
 	root := helpText()
-	for _, want := range []string{"omni channels", "--help", "-server"} {
+	for _, want := range []string{"omni channels", "omni status", "--help", "-server"} {
 		if !strings.Contains(root, want) {
 			t.Errorf("root help missing %q", want)
 		}
@@ -104,6 +130,16 @@ func TestHelpScreens(t *testing.T) {
 	}
 	if strings.Contains(ch, "██") {
 		t.Error("channels help should not have the banner")
+	}
+
+	st := helpStatus()
+	for _, want := range []string{"omni status", "alert"} {
+		if !strings.Contains(st, want) {
+			t.Errorf("status help missing %q", want)
+		}
+	}
+	if strings.Contains(st, "██") {
+		t.Error("status help should not have the banner")
 	}
 
 	co := helpConnect()

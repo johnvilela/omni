@@ -23,7 +23,7 @@ var (
 )
 
 type command struct {
-	name    string // help | list | detail | connect
+	name    string // help | status | list | detail | connect
 	channel string
 	topic   string // for help: "" (root) | channels | connect
 }
@@ -35,6 +35,15 @@ func route(args []string) (command, error) {
 	switch args[0] {
 	case "help", "--help", "-h":
 		return command{name: "help"}, nil
+	case "status":
+		if len(args) == 1 {
+			return command{name: "status"}, nil
+		}
+		switch args[1] {
+		case "--help", "-h":
+			return command{name: "help", topic: "status"}, nil
+		}
+		return command{}, fmt.Errorf("unknown argument %q — try `omni status --help`", args[1])
 	case "channels":
 		if len(args) == 1 {
 			return command{name: "list"}, nil
@@ -163,9 +172,13 @@ func run(args []string) int {
 			fmt.Print(helpChannels())
 		case "connect":
 			fmt.Print(helpConnect())
+		case "status":
+			fmt.Print(helpStatus())
 		default:
 			fmt.Print(helpText())
 		}
+	case "status":
+		return runStatus(c)
 	case "list":
 		chs, err := c.Channels()
 		if err != nil {
