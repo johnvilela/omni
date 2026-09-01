@@ -6,7 +6,7 @@ tags: [api, server, reference]
 
 The omni server listens on `:8787` (override with `OMNI_ADDR`); the CLI reads the same variable to find it. JSON everywhere.
 
-- `GET /status` → `{"app":"omni","version":"..."}` — identity of the running server. `version` is the git-describe stamp baked in at build time via ldflags (see [install](install.md)); `omni status` compares it against the CLI's own stamp and alerts on mismatch.
+- `GET /status` → `{"app":"omni","version":"..."}` — identity of the running server. Versions are per-service and hand-bumped: the server's lives in `server/main.go`, the CLI's in `cli/main.go` (shown in `omni --help`). They move independently, so differing cli/server versions are normal, not an error.
 - `GET /channels` → `[{"name":"telegram","connected":bool,"bot_username":"..."}]`
 - `GET /channels/telegram` → same object, single
 - `POST /channels/telegram/connect` — body `{"token":"..."}` optional.
