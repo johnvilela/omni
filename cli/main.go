@@ -13,6 +13,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// app identity, overridable at build time via -ldflags -X so a dev install
+// (omni-dev, :8788) can coexist with prod without sharing port, config or db.
+var (
+	app         = "omni"
+	defaultAddr = ":8787"
+	version     = "dev"
+)
+
 type command struct {
 	name    string // help | list | detail | connect
 	channel string
@@ -46,7 +54,7 @@ func serverURL() string {
 	a := os.Getenv("OMNI_ADDR")
 	switch {
 	case a == "":
-		return "http://localhost:8787"
+		return "http://localhost" + defaultAddr
 	case strings.HasPrefix(a, ":"):
 		return "http://localhost" + a
 	case strings.HasPrefix(a, "http://"), strings.HasPrefix(a, "https://"):
@@ -62,7 +70,7 @@ func saveToken(token string) error {
 	if err != nil {
 		return err
 	}
-	dir = filepath.Join(dir, "omni")
+	dir = filepath.Join(dir, app)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -88,7 +96,7 @@ func fail(err error) int {
 	var uerr *url.Error
 	if errors.As(err, &uerr) {
 		fmt.Fprintln(os.Stderr, errStyle.Render("cannot reach the omni server at "+serverURL()))
-		fmt.Fprintln(os.Stderr, helpStyle.Render("is it running? start it with: go run ./server"))
+		fmt.Fprintln(os.Stderr, helpStyle.Render("is it running? start it with: "+app+"-server"))
 		return 1
 	}
 	fmt.Fprintln(os.Stderr, errStyle.Render(err.Error()))
@@ -122,7 +130,7 @@ func runConnect(c *Client, channel string) int {
 		if serr := saveToken(token); serr != nil {
 			return fail(serr)
 		}
-		fmt.Println(dimStyle.Render("token saved to ~/.config/omni/config.yaml"))
+		fmt.Println(dimStyle.Render("token saved to ~/.config/" + app + "/config.yaml"))
 		ch, err = c.Connect(channel, token)
 	}
 	if err != nil {

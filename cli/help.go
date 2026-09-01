@@ -20,7 +20,7 @@ func helpText() string {
 	}
 
 	return bannerStyle.Render(banner) + "\n" +
-		dimStyle.Render("  a simplified, self-hosted messaging hub") + "\n\n" +
+		dimStyle.Render("  a simplified, self-hosted messaging hub · "+version) + "\n\n" +
 		titleStyle.Render("  USAGE") + "\n\n" +
 		row("omni help", "show this help (also: omni --help, omni -h)") +
 		row("omni channels", "list all channels and their status") +
@@ -28,6 +28,6 @@ func helpText() string {
 		row("omni channels connect", "pick a channel to connect") +
 		row("omni channels connect -c telegram", "connect telegram directly, skipping the picker") +
 		"\n" + titleStyle.Render("  SERVER") + "\n\n" +
-		"      start it with " + cmd.Render("go run ./server") + "\n" +
-		"      " + helpStyle.Render("listens on :8787 — override with OMNI_ADDR") + "\n\n"
+		"      start it with " + cmd.Render(app+"-server") + "\n" +
+		"      " + helpStyle.Render("listens on "+defaultAddr+" — override with OMNI_ADDR") + "\n\n"
 }

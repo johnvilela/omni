@@ -17,7 +17,7 @@ func ConfigPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "omni", "config.yaml")
+	return filepath.Join(dir, app, "config.yaml")
 }
 
 // ResolveToken picks the Telegram bot token: explicit request value first,

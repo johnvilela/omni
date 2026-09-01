@@ -8,15 +8,23 @@ import (
 	"path/filepath"
 )
 
+// app identity, overridable at build time via -ldflags -X so a dev install
+// (omni-dev, :8788) can coexist with prod without sharing port, config or db.
+var (
+	app         = "omni"
+	defaultAddr = ":8787"
+	version     = "dev"
+)
+
 func dbPath() string {
 	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
-		return filepath.Join(x, "omni", "omni.db")
+		return filepath.Join(x, app, "omni.db")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		log.Fatal(err)
 	}
-	return filepath.Join(home, ".local", "share", "omni", "omni.db")
+	return filepath.Join(home, ".local", "share", app, "omni.db")
 }
 
 func main() {
@@ -41,8 +49,8 @@ func main() {
 
 	addr := os.Getenv("OMNI_ADDR")
 	if addr == "" {
-		addr = ":8787"
+		addr = defaultAddr
 	}
-	log.Printf("omni server listening on %s", addr)
+	log.Printf("%s server %s listening on %s", app, version, addr)
 	log.Fatal(http.ListenAndServe(addr, srv.Handler()))
 }
