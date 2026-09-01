@@ -77,6 +77,9 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"app": app, "version": version})
+	})
 	mux.HandleFunc("GET /channels", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []channelStatus{s.telegramStatus()})
 	})
