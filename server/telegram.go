@@ -14,7 +14,7 @@ import (
 type Telegram struct {
 	base   string
 	client *http.Client
-	answer func(ctx context.Context, text string) string // reply to one text message
+	answer func(ctx context.Context, fromID int64, text string) string // reply to one text message
 }
 
 func NewTelegram(apiBase, token string) *Telegram {
@@ -31,6 +31,9 @@ type update struct {
 		Chat struct {
 			ID int64 `json:"id"`
 		} `json:"chat"`
+		From struct {
+			ID int64 `json:"id"`
+		} `json:"from"`
 		Text string `json:"text"`
 	} `json:"message"`
 }
@@ -124,8 +127,12 @@ func (t *Telegram) Poll(ctx context.Context) {
 			if u.Message == nil || u.Message.Text == "" {
 				continue
 			}
+			from := u.Message.From.ID
+			if from == 0 {
+				from = u.Message.Chat.ID // channel posts carry no sender
+			}
 			stop := t.typing(ctx, u.Message.Chat.ID)
-			reply := t.answer(ctx, u.Message.Text)
+			reply := t.answer(ctx, from, u.Message.Text)
 			stop()
 			err := t.call(ctx, "sendMessage", map[string]any{
 				"chat_id": u.Message.Chat.ID,

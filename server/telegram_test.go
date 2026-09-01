@@ -21,7 +21,7 @@ func fakeTelegram(t *testing.T, sent chan<- map[string]any, actions chan<- map[s
 	})
 	mux.HandleFunc("/botTOKEN/getUpdates", func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) == 1 {
-			fmt.Fprint(w, `{"ok":true,"result":[{"update_id":7,"message":{"chat":{"id":42},"text":"hello"}}]}`)
+			fmt.Fprint(w, `{"ok":true,"result":[{"update_id":7,"message":{"chat":{"id":42},"from":{"id":99},"text":"hello"}}]}`)
 			return
 		}
 		if r.URL.Query().Get("offset") != "8" {
@@ -68,7 +68,10 @@ func TestTelegramPollReplies(t *testing.T) {
 	done := make(chan struct{})
 	tg := NewTelegram(srv.URL, "TOKEN")
 	// blocking on the typing action proves the indicator fires while answering
-	tg.answer = func(_ context.Context, text string) string {
+	tg.answer = func(_ context.Context, from int64, text string) string {
+		if from != 99 {
+			t.Errorf("answer from = %d, want 99 (the sender id, not the chat)", from)
+		}
 		a := <-actions
 		if a["chat_id"] != float64(42) || a["action"] != "typing" {
 			t.Errorf("sendChatAction body = %v, want chat_id 42 typing", a)

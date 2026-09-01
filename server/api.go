@@ -43,7 +43,7 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 		return channelStatus{}, http.StatusBadRequest, errTokenRequired
 	}
 	tg := NewTelegram(s.apiBase, token)
-	tg.answer = s.answerNotice
+	tg.answer = s.gatedAnswer
 	username, err := tg.GetMe(ctx)
 	if err != nil {
 		return channelStatus{}, http.StatusUnauthorized, err
@@ -99,6 +99,49 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, code, status)
+	})
+	mux.HandleFunc("GET /pairing/telegram", func(w http.ResponseWriter, r *http.Request) {
+		ps, err := s.store.Pairings("telegram")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if ps == nil {
+			ps = []Pairing{}
+		}
+		writeJSON(w, http.StatusOK, ps)
+	})
+	mux.HandleFunc("POST /pairing/telegram/approve", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Code string `json:"code"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		id, err := s.store.ApprovePairing("telegram", body.Code)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if id == "" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown_code"})
+			return
+		}
+		writeJSON(w, http.StatusOK, Pairing{UserID: id, Code: body.Code, Approved: true})
+	})
+	mux.HandleFunc("POST /pairing/telegram/revoke", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			UserID string `json:"user_id"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		ok, err := s.store.RevokePairing("telegram", body.UserID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown_user"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
 	})
 	mux.HandleFunc("GET /llm", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.llmStatuses())
