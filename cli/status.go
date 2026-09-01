@@ -17,15 +17,24 @@ func (c *Client) Status() (ServerStatus, error) {
 	return st, err
 }
 
-func renderStatus(st ServerStatus, chs []Channel) string {
+func renderStatus(st ServerStatus, chs []Channel, llms []LLM) string {
 	s := "\n" + titleStyle.Render("  SERVER") + "\n\n" +
 		"  " + okStyle.Render("●") + " server — up " + dimStyle.Render(st.Version) + "\n\n" +
 		titleStyle.Render("  CHANNELS") + "\n\n"
 	for _, ch := range chs {
 		s += "  " + renderChannel(ch) + "\n"
 	}
-	s += "\n" + titleStyle.Render("  ALERTS") + "\n\n" +
-		dimStyle.Render("  no alerts") + "\n\n"
+	s += "\n" + titleStyle.Render("  LLM") + "\n\n"
+	for _, l := range llms {
+		s += "  " + renderLLM(l) + "\n"
+	}
+	s += "\n" + titleStyle.Render("  ALERTS") + "\n\n"
+	if st.Version != version {
+		s += "  " + warnStyle.Render("!") + " version mismatch: cli " + version +
+			", server " + st.Version + " — rebuild the older one\n\n"
+	} else {
+		s += dimStyle.Render("  no alerts") + "\n\n"
+	}
 	return s
 }
 
@@ -44,6 +53,10 @@ func runStatus(c *Client) int {
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Print(renderStatus(st, chs))
+	llms, err := c.LLMs()
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Print(renderStatus(st, chs, llms))
 	return 0
 }

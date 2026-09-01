@@ -12,8 +12,8 @@ APP="${APP:-omni}"
 ADDR="${ADDR:-:8787}"
 OUT="${OUT:-bin}"
 
-# versions are NOT stamped here: each binary carries its own hand-bumped
-# version var (cli/main.go and server/main.go)
+# the version is NOT stamped here: both binaries share the single
+# hand-bumped version in version/version.go
 X="-X main.app=$APP -X main.defaultAddr=$ADDR"
 FLAGS=()
 LDFLAGS="$X"

@@ -14,6 +14,7 @@ import (
 type Telegram struct {
 	base   string
 	client *http.Client
+	answer func(ctx context.Context, text string) string // reply to one text message
 }
 
 func NewTelegram(apiBase, token string) *Telegram {
@@ -80,8 +81,27 @@ func (t *Telegram) GetMe(ctx context.Context) (string, error) {
 	return me.Username, nil
 }
 
-// Poll long-polls getUpdates and replies to each text message with it reversed.
+// typing keeps the "typing…" indicator alive while an answer is produced;
+// telegram shows it for ~5s per sendChatAction, so re-send until stopped.
+func (t *Telegram) typing(ctx context.Context, chatID int64) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		for {
+			t.call(ctx, "sendChatAction", map[string]any{"chat_id": chatID, "action": "typing"}, nil) // best-effort
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(4 * time.Second):
+			}
+		}
+	}()
+	return cancel
+}
+
+// Poll long-polls getUpdates and replies to each text message via t.answer.
 // Returns when ctx is cancelled.
+// ponytail: answers serially in the poll loop; goroutine-per-message if chat
+// volume ever matters.
 func (t *Telegram) Poll(ctx context.Context) {
 	var offset int64
 	for ctx.Err() == nil {
@@ -104,9 +124,12 @@ func (t *Telegram) Poll(ctx context.Context) {
 			if u.Message == nil || u.Message.Text == "" {
 				continue
 			}
+			stop := t.typing(ctx, u.Message.Chat.ID)
+			reply := t.answer(ctx, u.Message.Text)
+			stop()
 			err := t.call(ctx, "sendMessage", map[string]any{
 				"chat_id": u.Message.Chat.ID,
-				"text":    Reverse(u.Message.Text),
+				"text":    reply,
 			}, nil)
 			if err != nil {
 				log.Printf("telegram: sendMessage: %v", err)

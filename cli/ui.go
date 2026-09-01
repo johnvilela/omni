@@ -14,6 +14,7 @@ var (
 	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 )
 
@@ -64,19 +65,21 @@ func (m selectModel) View() string {
 	return s + "\n" + helpStyle.Render("↑/↓ move · enter select · esc cancel") + "\n"
 }
 
-// tokenModel prompts for the Telegram bot token.
+// tokenModel prompts for a secret (bot token, API key) with masked input.
 type tokenModel struct {
+	title    string
+	help     string
 	input    textinput.Model
 	done     bool
 	canceled bool
 }
 
-func newTokenModel() tokenModel {
+func newTokenModel(title, placeholder, help string) tokenModel {
 	ti := textinput.New()
-	ti.Placeholder = "123456:ABC-DEF..."
+	ti.Placeholder = placeholder
 	ti.EchoMode = textinput.EchoPassword
 	ti.Focus()
-	return tokenModel{input: ti}
+	return tokenModel{title: title, help: help, input: ti}
 }
 
 func (m tokenModel) Init() tea.Cmd { return textinput.Blink }
@@ -98,9 +101,9 @@ func (m tokenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m tokenModel) View() string {
-	return titleStyle.Render("Telegram bot token") + "\n\n" +
+	return titleStyle.Render(m.title) + "\n\n" +
 		"  " + m.input.View() + "\n\n" +
-		helpStyle.Render("paste your BotFather token · enter confirm · esc cancel") + "\n"
+		helpStyle.Render(m.help) + "\n"
 }
 
 // Token returns the entered token, or "" if the prompt was canceled.

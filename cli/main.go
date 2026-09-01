@@ -8,26 +8,29 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"gopkg.in/yaml.v3"
+
+	omniversion "omni/version"
 )
 
 // app and defaultAddr are overridable at build time via -ldflags -X so a dev
 // install (omni-dev, :8788) can coexist with prod without sharing port,
-// config or db. version belongs to the cli alone — bump it when the cli
-// changes; the server has its own.
+// config or db. The version is omni-wide, shared with the server.
 var (
 	app         = "omni"
 	defaultAddr = ":8787"
-	version     = "v0.1.0"
 )
 
+const version = omniversion.Version
+
 type command struct {
-	name    string // help | status | list | detail | connect
-	channel string
-	topic   string // for help: "" (root) | channels | connect
+	name    string // help | status | list | detail | connect | llm-list | llm-detail | llm-connect
+	channel string // channel name, or llm provider for the llm-* commands
+	topic   string // for help: "" (root) | status | channels | connect | llm | llm-connect
 }
 
 func route(args []string) (command, error) {
@@ -66,6 +69,37 @@ func route(args []string) (command, error) {
 			return command{name: "connect", channel: *c}, nil
 		}
 		return command{name: "detail", channel: args[1]}, nil
+	case "llm":
+		if len(args) == 1 {
+			return command{name: "llm-list"}, nil
+		}
+		switch args[1] {
+		case "--help", "-h":
+			return command{name: "help", topic: "llm"}, nil
+		case "connect":
+			fs := flag.NewFlagSet("connect", flag.ContinueOnError)
+			fs.SetOutput(io.Discard) // we print our own help, not flag's usage dump
+			p := fs.String("p", "", "provider to connect")
+			if err := fs.Parse(args[2:]); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return command{name: "help", topic: "llm-connect"}, nil
+				}
+				return command{}, err
+			}
+			return command{name: "llm-connect", channel: *p}, nil
+		case "set-default":
+			fs := flag.NewFlagSet("set-default", flag.ContinueOnError)
+			fs.SetOutput(io.Discard) // we print our own help, not flag's usage dump
+			p := fs.String("p", "", "provider to make the default")
+			if err := fs.Parse(args[2:]); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return command{name: "help", topic: "llm-set-default"}, nil
+				}
+				return command{}, err
+			}
+			return command{name: "llm-set-default", channel: *p}, nil
+		}
+		return command{name: "llm-detail", channel: args[1]}, nil
 	}
 	return command{}, fmt.Errorf("unknown command %q — try `omni help`", args[0])
 }
@@ -84,8 +118,9 @@ func serverURL() string {
 	}
 }
 
-// saveToken writes the bot token to ~/.config/omni/config.yaml (0600).
-func saveToken(token string) error {
+// saveConfigKey merges one key into ~/.config/omni/config.yaml (0600),
+// keeping the other keys intact.
+func saveConfigKey(key, value string) error {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return err
@@ -94,11 +129,42 @@ func saveToken(token string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(map[string]string{"telegram_token": token})
+	path := filepath.Join(dir, "config.yaml")
+	cfg := map[string]string{}
+	if data, err := os.ReadFile(path); err == nil {
+		yaml.Unmarshal(data, &cfg) // unreadable config: start fresh
+	}
+	cfg[key] = value
+	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "config.yaml"), data, 0o600)
+	return os.WriteFile(path, data, 0o600)
+}
+
+var llmProviderNames = []string{"openai", "claude", "gemini"}
+
+// llmConfigKey maps a provider to its config.yaml key (server reads the same).
+var llmConfigKey = map[string]string{
+	"openai": "openai_key",
+	"claude": "anthropic_key",
+	"gemini": "gemini_key",
+}
+
+func renderLLM(l LLM) string {
+	var s string
+	if l.Connected {
+		s = okStyle.Render("●") + " " + l.Name + " — connected"
+		if l.Source != "" {
+			s += dimStyle.Render(" (" + l.Source + ")")
+		}
+	} else {
+		s = dimStyle.Render("○ " + l.Name + " — disconnected")
+	}
+	if l.Default {
+		s += " " + selectedStyle.Render("★ default")
+	}
+	return s
 }
 
 func renderChannel(ch Channel) string {
@@ -109,7 +175,7 @@ func renderChannel(ch Channel) string {
 		}
 		return s
 	}
-	return dimStyle.Render("○ "+ch.Name+" — disconnected")
+	return dimStyle.Render("○ " + ch.Name + " — disconnected")
 }
 
 func fail(err error) int {
@@ -138,7 +204,8 @@ func runConnect(c *Client, channel string) int {
 
 	ch, err := c.Connect(channel, "")
 	if errors.Is(err, ErrTokenRequired) {
-		final, terr := tea.NewProgram(newTokenModel()).Run()
+		final, terr := tea.NewProgram(newTokenModel("Telegram bot token", "123456:ABC-DEF...",
+			"paste your BotFather token · enter confirm · esc cancel")).Run()
 		if terr != nil {
 			return fail(terr)
 		}
@@ -147,7 +214,7 @@ func runConnect(c *Client, channel string) int {
 			fmt.Println(dimStyle.Render("canceled"))
 			return 1
 		}
-		if serr := saveToken(token); serr != nil {
+		if serr := saveConfigKey("telegram_token", token); serr != nil {
 			return fail(serr)
 		}
 		fmt.Println(dimStyle.Render("token saved to ~/.config/" + app + "/config.yaml"))
@@ -157,6 +224,69 @@ func runConnect(c *Client, channel string) int {
 		return fail(err)
 	}
 	fmt.Println(okStyle.Render("✓") + " " + ch.Name + " connected as " + selectedStyle.Render("@"+ch.BotUsername))
+	return 0
+}
+
+func runLLMConnect(c *Client, provider string) int {
+	if provider == "" {
+		final, err := tea.NewProgram(newSelectModel("Connect an llm provider", llmProviderNames)).Run()
+		if err != nil {
+			return fail(err)
+		}
+		provider = final.(selectModel).choice
+		if provider == "" {
+			fmt.Println(dimStyle.Render("canceled"))
+			return 1
+		}
+	}
+
+	l, err := c.ConnectLLM(provider, "")
+	if errors.Is(err, ErrKeyRequired) {
+		final, terr := tea.NewProgram(newTokenModel(provider+" API key", "sk-...",
+			"paste your API key · enter confirm · esc cancel")).Run()
+		if terr != nil {
+			return fail(terr)
+		}
+		key := final.(tokenModel).Token()
+		if key == "" {
+			fmt.Println(dimStyle.Render("canceled"))
+			return 1
+		}
+		if serr := saveConfigKey(llmConfigKey[provider], key); serr != nil {
+			return fail(serr)
+		}
+		fmt.Println(dimStyle.Render("key saved to ~/.config/" + app + "/config.yaml"))
+		l, err = c.ConnectLLM(provider, key)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Println(okStyle.Render("✓") + " " + l.Name + " connected " + dimStyle.Render("("+l.Source+")"))
+	return 0
+}
+
+// runLLMSetDefault saves the default provider to config.yaml; the server only
+// reads it, so no API call is needed.
+func runLLMSetDefault(provider string) int {
+	if provider == "" {
+		final, err := tea.NewProgram(newSelectModel("Default llm provider", llmProviderNames)).Run()
+		if err != nil {
+			return fail(err)
+		}
+		provider = final.(selectModel).choice
+		if provider == "" {
+			fmt.Println(dimStyle.Render("canceled"))
+			return 1
+		}
+	}
+	if !slices.Contains(llmProviderNames, provider) {
+		fmt.Fprintln(os.Stderr, errStyle.Render(fmt.Sprintf("unknown provider %q — one of: %s", provider, strings.Join(llmProviderNames, ", "))))
+		return 2
+	}
+	if err := saveConfigKey("default_llm", provider); err != nil {
+		return fail(err)
+	}
+	fmt.Println(okStyle.Render("✓") + " " + provider + " is now the default llm")
 	return 0
 }
 
@@ -176,6 +306,12 @@ func run(args []string) int {
 			fmt.Print(helpConnect())
 		case "status":
 			fmt.Print(helpStatus())
+		case "llm":
+			fmt.Print(helpLLM())
+		case "llm-connect":
+			fmt.Print(helpLLMConnect())
+		case "llm-set-default":
+			fmt.Print(helpLLMSetDefault())
 		default:
 			fmt.Print(helpText())
 		}
@@ -197,6 +333,24 @@ func run(args []string) int {
 		fmt.Println(renderChannel(ch))
 	case "connect":
 		return runConnect(c, cmd.channel)
+	case "llm-list":
+		ls, err := c.LLMs()
+		if err != nil {
+			return fail(err)
+		}
+		for _, l := range ls {
+			fmt.Println(renderLLM(l))
+		}
+	case "llm-detail":
+		l, err := c.LLM(cmd.channel)
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Println(renderLLM(l))
+	case "llm-connect":
+		return runLLMConnect(c, cmd.channel)
+	case "llm-set-default":
+		return runLLMSetDefault(cmd.channel)
 	}
 	return 0
 }

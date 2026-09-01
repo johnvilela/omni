@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sync"
 )
 
@@ -42,6 +43,7 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 		return channelStatus{}, http.StatusBadRequest, errTokenRequired
 	}
 	tg := NewTelegram(s.apiBase, token)
+	tg.answer = s.answerNotice
 	username, err := tg.GetMe(ctx)
 	if err != nil {
 		return channelStatus{}, http.StatusUnauthorized, err
@@ -92,6 +94,39 @@ func (s *Server) Handler() http.Handler {
 		}
 		json.NewDecoder(r.Body).Decode(&body) // empty body is fine
 		status, code, err := s.ConnectTelegram(r.Context(), body.Token)
+		if err != nil {
+			writeJSON(w, code, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, code, status)
+	})
+	mux.HandleFunc("GET /llm", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, s.llmStatuses())
+	})
+	mux.HandleFunc("GET /llm/{provider}", func(w http.ResponseWriter, r *http.Request) {
+		p := r.PathValue("provider")
+		if !slices.Contains(llmProviders, p) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown_provider"})
+			return
+		}
+		for _, ls := range s.llmStatuses() {
+			if ls.Name == p {
+				writeJSON(w, http.StatusOK, ls)
+				return
+			}
+		}
+	})
+	mux.HandleFunc("POST /llm/{provider}/connect", func(w http.ResponseWriter, r *http.Request) {
+		p := r.PathValue("provider")
+		if !slices.Contains(llmProviders, p) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown_provider"})
+			return
+		}
+		var body struct {
+			Key string `json:"key"`
+		}
+		json.NewDecoder(r.Body).Decode(&body) // empty body is fine
+		status, code, err := s.ConnectLLM(r.Context(), p, body.Key)
 		if err != nil {
 			writeJSON(w, code, map[string]string{"error": err.Error()})
 			return

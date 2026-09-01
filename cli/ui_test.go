@@ -45,7 +45,7 @@ func TestSelectModelViewShowsItems(t *testing.T) {
 }
 
 func TestTokenModelCapturesInput(t *testing.T) {
-	m := newTokenModel()
+	m := newTokenModel("Secret", "...", "enter confirm · esc cancel")
 	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("123:abc")})
 	m = mm.(tokenModel)
 	mm, _ = m.Update(key(tea.KeyEnter))
@@ -56,7 +56,7 @@ func TestTokenModelCapturesInput(t *testing.T) {
 }
 
 func TestTokenModelEscCancels(t *testing.T) {
-	m := newTokenModel()
+	m := newTokenModel("Secret", "...", "enter confirm · esc cancel")
 	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	m = mm.(tokenModel)
 	mm, _ = m.Update(key(tea.KeyEsc))

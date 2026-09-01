@@ -6,17 +6,19 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	omniversion "omni/version"
 )
 
 // app and defaultAddr are overridable at build time via -ldflags -X so a dev
 // install (omni-dev, :8788) can coexist with prod without sharing port,
-// config or db. version belongs to the server alone — bump it when the
-// server changes; the cli has its own.
+// config or db. The version is omni-wide, shared with the cli.
 var (
 	app         = "omni"
 	defaultAddr = ":8787"
-	version     = "v0.1.0"
 )
+
+const version = omniversion.Version
 
 func dbPath() string {
 	if x := os.Getenv("XDG_DATA_HOME"); x != "" {

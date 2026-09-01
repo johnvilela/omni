@@ -16,8 +16,19 @@ type Channel struct {
 	BotUsername string `json:"bot_username"`
 }
 
+// LLM mirrors the server's llm provider status JSON.
+type LLM struct {
+	Name      string `json:"name"`
+	Connected bool   `json:"connected"`
+	Source    string `json:"source"`
+	Default   bool   `json:"default"`
+}
+
 // ErrTokenRequired means the server has no bot token; prompt the user.
 var ErrTokenRequired = errors.New("token_required")
+
+// ErrKeyRequired means the server has no credentials for the provider; prompt.
+var ErrKeyRequired = errors.New("key_required")
 
 // Client is a tiny HTTP client for the omni server API.
 type Client struct {
@@ -56,6 +67,9 @@ func (c *Client) do(method, path string, body, out any) error {
 		if e.Error == "token_required" {
 			return ErrTokenRequired
 		}
+		if e.Error == "key_required" {
+			return ErrKeyRequired
+		}
 		if e.Error == "" {
 			e.Error = resp.Status
 		}
@@ -83,4 +97,22 @@ func (c *Client) Connect(name, token string) (Channel, error) {
 	var ch Channel
 	err := c.do(http.MethodPost, "/channels/"+name+"/connect", map[string]string{"token": token}, &ch)
 	return ch, err
+}
+
+func (c *Client) LLMs() ([]LLM, error) {
+	var ls []LLM
+	err := c.do(http.MethodGet, "/llm", nil, &ls)
+	return ls, err
+}
+
+func (c *Client) LLM(name string) (LLM, error) {
+	var l LLM
+	err := c.do(http.MethodGet, "/llm/"+name, nil, &l)
+	return l, err
+}
+
+func (c *Client) ConnectLLM(name, key string) (LLM, error) {
+	var l LLM
+	err := c.do(http.MethodPost, "/llm/"+name+"/connect", map[string]string{"key": key}, &l)
+	return l, err
 }

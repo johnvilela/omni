@@ -9,6 +9,23 @@ import (
 
 type Config struct {
 	TelegramToken string `yaml:"telegram_token"`
+	OpenAIKey     string `yaml:"openai_key"`
+	AnthropicKey  string `yaml:"anthropic_key"`
+	GeminiKey     string `yaml:"gemini_key"`
+	DefaultLLM    string `yaml:"default_llm"`
+}
+
+// readConfig loads ~/.config/omni/config.yaml; zero Config on any error.
+func readConfig() Config {
+	var cfg Config
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		return Config{}
+	}
+	if yaml.Unmarshal(data, &cfg) != nil {
+		return Config{}
+	}
+	return cfg
 }
 
 // ConfigPath is ~/.config/omni/config.yaml (respects XDG_CONFIG_HOME).
@@ -29,13 +46,5 @@ func ResolveToken(req string) string {
 	if env := os.Getenv("TELEGRAM_BOT_TOKEN"); env != "" {
 		return env
 	}
-	data, err := os.ReadFile(ConfigPath())
-	if err != nil {
-		return ""
-	}
-	var cfg Config
-	if yaml.Unmarshal(data, &cfg) != nil {
-		return ""
-	}
-	return cfg.TelegramToken
+	return readConfig().TelegramToken
 }

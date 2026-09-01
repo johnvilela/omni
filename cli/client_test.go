@@ -23,6 +23,16 @@ func fakeServer() *httptest.Server {
 		w.WriteHeader(400)
 		fmt.Fprint(w, `{"error":"token_required"}`)
 	})
+	mux.HandleFunc("GET /llm", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"name":"openai","connected":true,"source":"api_key"},{"name":"claude","connected":false},{"name":"gemini","connected":false}]`)
+	})
+	mux.HandleFunc("GET /llm/openai", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"name":"openai","connected":true,"source":"api_key"}`)
+	})
+	mux.HandleFunc("POST /llm/openai/connect", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		fmt.Fprint(w, `{"error":"key_required"}`)
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -61,6 +71,33 @@ func TestClientConnectTokenRequired(t *testing.T) {
 	_, err := c.Connect("telegram", "")
 	if !errors.Is(err, ErrTokenRequired) {
 		t.Fatalf("Connect error = %v, want ErrTokenRequired", err)
+	}
+}
+
+func TestClientLLMs(t *testing.T) {
+	srv := fakeServer()
+	defer srv.Close()
+	c := NewClient(srv.URL)
+
+	ls, err := c.LLMs()
+	if err != nil || len(ls) != 3 || ls[0].Name != "openai" || !ls[0].Connected || ls[0].Source != "api_key" {
+		t.Fatalf("LLMs = %v, %v", ls, err)
+	}
+
+	l, err := c.LLM("openai")
+	if err != nil || l.Source != "api_key" {
+		t.Fatalf("LLM = %v, %v", l, err)
+	}
+}
+
+func TestClientConnectLLMKeyRequired(t *testing.T) {
+	srv := fakeServer()
+	defer srv.Close()
+	c := NewClient(srv.URL)
+
+	_, err := c.ConnectLLM("openai", "")
+	if !errors.Is(err, ErrKeyRequired) {
+		t.Fatalf("ConnectLLM error = %v, want ErrKeyRequired", err)
 	}
 }
 

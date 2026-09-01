@@ -12,7 +12,8 @@ import (
 )
 
 // fakeTelegram serves getMe, one update on the first getUpdates, then empties.
-func fakeTelegram(t *testing.T, sent chan<- map[string]any) *httptest.Server {
+// sendChatAction bodies go to actions when non-nil.
+func fakeTelegram(t *testing.T, sent chan<- map[string]any, actions chan<- map[string]any) *httptest.Server {
 	var calls atomic.Int64
 	mux := http.NewServeMux()
 	mux.HandleFunc("/botTOKEN/getMe", func(w http.ResponseWriter, r *http.Request) {
@@ -28,6 +29,14 @@ func fakeTelegram(t *testing.T, sent chan<- map[string]any) *httptest.Server {
 		}
 		fmt.Fprint(w, `{"ok":true,"result":[]}`)
 	})
+	mux.HandleFunc("/botTOKEN/sendChatAction", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if actions != nil {
+			actions <- body
+		}
+		fmt.Fprint(w, `{"ok":true,"result":true}`)
+	})
 	mux.HandleFunc("/botTOKEN/sendMessage", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
@@ -38,7 +47,7 @@ func fakeTelegram(t *testing.T, sent chan<- map[string]any) *httptest.Server {
 }
 
 func TestTelegramGetMe(t *testing.T) {
-	srv := fakeTelegram(t, nil)
+	srv := fakeTelegram(t, nil, nil)
 	defer srv.Close()
 
 	tg := NewTelegram(srv.URL, "TOKEN")
@@ -48,21 +57,30 @@ func TestTelegramGetMe(t *testing.T) {
 	}
 }
 
-func TestTelegramPollRepliesReversed(t *testing.T) {
+func TestTelegramPollReplies(t *testing.T) {
 	sent := make(chan map[string]any, 1)
-	srv := fakeTelegram(t, sent)
+	actions := make(chan map[string]any, 8)
+	srv := fakeTelegram(t, sent, actions)
 	defer srv.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
 	tg := NewTelegram(srv.URL, "TOKEN")
+	// blocking on the typing action proves the indicator fires while answering
+	tg.answer = func(_ context.Context, text string) string {
+		a := <-actions
+		if a["chat_id"] != float64(42) || a["action"] != "typing" {
+			t.Errorf("sendChatAction body = %v, want chat_id 42 typing", a)
+		}
+		return "echo:" + text
+	}
 	go func() { tg.Poll(ctx); close(done) }()
 
 	select {
 	case body := <-sent:
-		if body["chat_id"] != float64(42) || body["text"] != "olleh" {
-			t.Fatalf("sendMessage body = %v, want chat_id 42, text olleh", body)
+		if body["chat_id"] != float64(42) || body["text"] != "echo:hello" {
+			t.Fatalf("sendMessage body = %v, want chat_id 42, text echo:hello", body)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no sendMessage within 3s")
