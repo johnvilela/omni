@@ -14,6 +14,9 @@ The omni server listens on `:8787` (override with `OMNI_ADDR`); the CLI reads th
   - `200` connected (validates via Telegram `getMe`, starts long-poll, persists intent to SQLite)
   - `400 {"error":"token_required"}` — no token anywhere; the CLI prompts and saves it to config.yaml
   - `401` — Telegram rejected the token
+- `GET /pairing/telegram` → `[{"user_id":"...","code":"...","approved":bool}]` — every user who ever messaged the bot: approved (paired) and pending
+- `POST /pairing/telegram/approve` — body `{"code":"..."}` → `200` the approved pairing | `404 {"error":"unknown_code"}`
+- `POST /pairing/telegram/revoke` — body `{"user_id":"..."}` → `200` | `404 {"error":"unknown_user"}` (revoked users start over: next message issues a fresh code)
 - `GET /llm` → `[{"name":"openai","connected":bool,"source":"...","default":bool}]` — the three providers (openai, claude, gemini)
 - `GET /llm/{provider}` → same object, single; `404 {"error":"unknown_provider"}` for anything else
 - `POST /llm/{provider}/connect` — body `{"key":"..."}` optional.
@@ -23,6 +26,8 @@ The omni server listens on `:8787` (override with `OMNI_ADDR`); the CLI reads th
   - `401` — the provider rejected the api key
 
 Behavior notes:
+
+- **Telegram answers are gated by pairing** (keyed on the sender's user id, `message.from.id`): an unknown sender's first message gets the full pairing instructions (their id + an 8-char code + the `omni pairing approve telegram <code>` command, mirroring Openclaw's flow); while pending they get a short "awaiting approval" reminder; only approved senders reach the llm answer flow. Pairings live in the SQLite `pairings` table; codes use an alphabet without ambiguous chars (no 0/O/1/I/L) and never expire.
 
 - The server long-polls `getUpdates?timeout=50` and answers every text message with the **default llm** — single-turn text in/out, no history, no system prompt. `api_key` sources call the provider API directly with hardcoded cheap models (`gpt-4o-mini` / `claude-3-5-haiku-latest` / `gemini-2.0-flash`); `oauth` and `claude-code` sources shell out to the vendor CLI (`codex exec --skip-git-repo-check` / `claude -p` / `gemini -p`) since their stored tokens aren't usable for direct API calls (gotcha: codex refuses to run outside a trusted/git directory without that flag; its answer goes to stdout, all progress noise to stderr). A faster direct-HTTP route for openai exists but is deliberately deferred — see [[openai-codex-backend]]. While an answer is being produced the bot shows the telegram "typing…" indicator (`sendChatAction` re-sent every 4s — telegram only shows it ~5s per call). No usable llm (no default, or default disconnected) → the bot replies with a `⚠` error notice, never silence. The old rune-reverse echo is gone.
 - Connected state lives in SQLite (`channels` table) as *intent*: on restart the server auto-reconnects if the token still resolves. Live status reported by the API is whether a poller is actually running.
