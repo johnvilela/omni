@@ -39,6 +39,13 @@ func TestRoute(t *testing.T) {
 		{[]string{"llm", "set-default"}, "llm-set-default", "", "", false},
 		{[]string{"llm", "set-default", "-p", "openai"}, "llm-set-default", "openai", "", false},
 		{[]string{"llm", "set-default", "--help"}, "help", "", "llm-set-default", false},
+		{[]string{"pairing"}, "pairing-list", "", "", false},
+		{[]string{"pairing", "--help"}, "help", "", "pairing", false},
+		{[]string{"pairing", "-h"}, "help", "", "pairing", false},
+		{[]string{"pairing", "approve", "--help"}, "help", "", "pairing", false},
+		{[]string{"pairing", "approve", "telegram"}, "", "", "", true},
+		{[]string{"pairing", "approve", "discord", "X"}, "", "", "", true},
+		{[]string{"pairing", "junk"}, "", "", "", true},
 		{[]string{"status"}, "status", "", "", false},
 		{[]string{"status", "--help"}, "help", "", "status", false},
 		{[]string{"status", "-h"}, "help", "", "status", false},
@@ -53,6 +60,34 @@ func TestRoute(t *testing.T) {
 		}
 		if err == nil && (cmd.name != c.name || cmd.channel != c.channel || cmd.topic != c.topic) {
 			t.Errorf("route(%v) = %+v, want {%s %s %s}", c.args, cmd, c.name, c.channel, c.topic)
+		}
+	}
+
+	// approve/revoke carry the code / user id in cmd.arg
+	cmd, err := route([]string{"pairing", "approve", "telegram", "CODE1234"})
+	if err != nil || cmd.name != "pairing-approve" || cmd.channel != "telegram" || cmd.arg != "CODE1234" {
+		t.Errorf("route(pairing approve) = %+v, %v", cmd, err)
+	}
+	cmd, err = route([]string{"pairing", "revoke", "telegram", "99"})
+	if err != nil || cmd.name != "pairing-revoke" || cmd.channel != "telegram" || cmd.arg != "99" {
+		t.Errorf("route(pairing revoke) = %+v, %v", cmd, err)
+	}
+}
+
+func TestRenderPairing(t *testing.T) {
+	ok := renderPairing(Pairing{UserID: "99", Code: "CODE1234", Approved: true})
+	for _, want := range []string{"99", "paired"} {
+		if !strings.Contains(ok, want) {
+			t.Errorf("paired row missing %q in %q", want, ok)
+		}
+	}
+	if strings.Contains(ok, "CODE1234") {
+		t.Errorf("paired row should not show the code: %q", ok)
+	}
+	pend := renderPairing(Pairing{UserID: "7", Code: "CODE1234"})
+	for _, want := range []string{"7", "pending", "CODE1234"} {
+		if !strings.Contains(pend, want) {
+			t.Errorf("pending row missing %q in %q", want, pend)
 		}
 	}
 }
@@ -173,7 +208,7 @@ func TestRunLLMSetDefault(t *testing.T) {
 
 func TestHelpScreens(t *testing.T) {
 	root := helpText()
-	for _, want := range []string{"omni channels", "omni status", "omni llm", "--help", "-server", version} {
+	for _, want := range []string{"omni channels", "omni status", "omni llm", "omni pairing", "--help", "-server", version} {
 		if !strings.Contains(root, want) {
 			t.Errorf("root help missing %q", want)
 		}
@@ -203,6 +238,16 @@ func TestHelpScreens(t *testing.T) {
 	}
 	if strings.Contains(st, "██") {
 		t.Error("status help should not have the banner")
+	}
+
+	pr := helpPairing()
+	for _, want := range []string{"approve", "revoke", "omni pairing approve telegram"} {
+		if !strings.Contains(pr, want) {
+			t.Errorf("pairing help missing %q", want)
+		}
+	}
+	if strings.Contains(pr, "██") {
+		t.Error("pairing help should not have the banner")
 	}
 
 	co := helpConnect()

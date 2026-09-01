@@ -27,6 +27,7 @@ func helpText() string {
 		row("omni status", "server, channels, llm providers and alerts at a glance") +
 		row("omni channels", "manage message channels") +
 		row("omni llm", "manage llm providers (openai, claude, gemini)") +
+		row("omni pairing", "control who may talk to the bot") +
 		row("omni help", "show this help (also: omni --help, omni -h)") +
 		"\n" + helpStyle.Render("      run `omni <command> --help` for flags, subcommands and examples") + "\n" +
 		"\n" + titleStyle.Render("  SERVER") + "\n\n" +
@@ -39,6 +40,20 @@ func helpStatus() string {
 		"      " + cmdStyle.Render("omni status") + "\n\n" +
 		"      server, channels, llm providers and alerts at a glance\n" +
 		helpStyle.Render("      alerts warn when the cli and server versions differ") + "\n\n"
+}
+
+func helpPairing() string {
+	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
+		"      " + cmdStyle.Render("omni pairing [approve | revoke]") + "\n\n" +
+		titleStyle.Render("  SUBCOMMANDS") + "\n\n" +
+		row("omni pairing", "list paired and pending telegram users") +
+		row("omni pairing approve telegram <code>", "authorize the user who got this code") +
+		row("omni pairing revoke telegram <user-id>", "remove a paired user") +
+		"\n" + titleStyle.Render("  EXAMPLES") + "\n\n" +
+		"      omni pairing approve telegram ABCD2345\n" +
+		"      omni pairing revoke telegram 123456789\n\n" +
+		helpStyle.Render("      an unpaired user who messages the bot receives a pairing code;\n"+
+			"      the bot answers nothing else until you approve it") + "\n\n"
 }
 
 func helpChannels() string {

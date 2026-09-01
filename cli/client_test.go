@@ -13,6 +13,15 @@ func fakeServer() *httptest.Server {
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"app":"omni","version":"v1.2.3"}`)
 	})
+	mux.HandleFunc("GET /pairing/telegram", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"user_id":"99","code":"CODE1234","approved":false}]`)
+	})
+	mux.HandleFunc("POST /pairing/telegram/approve", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"user_id":"99","code":"CODE1234","approved":true}`)
+	})
+	mux.HandleFunc("POST /pairing/telegram/revoke", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{}`)
+	})
 	mux.HandleFunc("GET /channels", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `[{"name":"telegram","connected":true,"bot_username":"omni_bot"}]`)
 	})
@@ -44,6 +53,26 @@ func TestClientStatus(t *testing.T) {
 	st, err := c.Status()
 	if err != nil || st.App != "omni" || st.Version != "v1.2.3" {
 		t.Fatalf("Status = %v, %v", st, err)
+	}
+}
+
+func TestClientPairings(t *testing.T) {
+	srv := fakeServer()
+	defer srv.Close()
+	c := NewClient(srv.URL)
+
+	ps, err := c.Pairings("telegram")
+	if err != nil || len(ps) != 1 || ps[0].UserID != "99" || ps[0].Code != "CODE1234" || ps[0].Approved {
+		t.Fatalf("Pairings = %v, %v", ps, err)
+	}
+
+	p, err := c.ApprovePairing("telegram", "CODE1234")
+	if err != nil || p.UserID != "99" || !p.Approved {
+		t.Fatalf("ApprovePairing = %v, %v", p, err)
+	}
+
+	if err := c.RevokePairing("telegram", "99"); err != nil {
+		t.Fatalf("RevokePairing = %v", err)
 	}
 }
 

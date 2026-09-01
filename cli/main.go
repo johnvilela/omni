@@ -28,9 +28,10 @@ var (
 const version = omniversion.Version
 
 type command struct {
-	name    string // help | status | list | detail | connect | llm-list | llm-detail | llm-connect
+	name    string // help | status | list | detail | connect | llm-* | pairing-*
 	channel string // channel name, or llm provider for the llm-* commands
-	topic   string // for help: "" (root) | status | channels | connect | llm | llm-connect
+	topic   string // for help: "" (root) | status | channels | connect | llm | llm-connect | pairing
+	arg     string // pairing-approve: the code; pairing-revoke: the user id
 }
 
 func route(args []string) (command, error) {
@@ -100,6 +101,25 @@ func route(args []string) (command, error) {
 			return command{name: "llm-set-default", channel: *p}, nil
 		}
 		return command{name: "llm-detail", channel: args[1]}, nil
+	case "pairing":
+		if len(args) == 1 {
+			return command{name: "pairing-list"}, nil
+		}
+		switch args[1] {
+		case "--help", "-h":
+			return command{name: "help", topic: "pairing"}, nil
+		case "approve", "revoke":
+			rest := args[2:]
+			if slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
+				return command{name: "help", topic: "pairing"}, nil
+			}
+			what := map[string]string{"approve": "<code>", "revoke": "<user-id>"}[args[1]]
+			if len(rest) != 2 || rest[0] != "telegram" {
+				return command{}, fmt.Errorf("usage: omni pairing %s telegram %s", args[1], what)
+			}
+			return command{name: "pairing-" + args[1], channel: rest[0], arg: rest[1]}, nil
+		}
+		return command{}, fmt.Errorf("unknown subcommand %q — try `omni pairing --help`", args[1])
 	}
 	return command{}, fmt.Errorf("unknown command %q — try `omni help`", args[0])
 }
@@ -165,6 +185,13 @@ func renderLLM(l LLM) string {
 		s += " " + selectedStyle.Render("★ default")
 	}
 	return s
+}
+
+func renderPairing(p Pairing) string {
+	if p.Approved {
+		return okStyle.Render("●") + " " + p.UserID + " — paired"
+	}
+	return dimStyle.Render("○ "+p.UserID+" — pending") + " · approve with code " + selectedStyle.Render(p.Code)
 }
 
 func renderChannel(ch Channel) string {
@@ -312,6 +339,8 @@ func run(args []string) int {
 			fmt.Print(helpLLMConnect())
 		case "llm-set-default":
 			fmt.Print(helpLLMSetDefault())
+		case "pairing":
+			fmt.Print(helpPairing())
 		default:
 			fmt.Print(helpText())
 		}
@@ -351,6 +380,29 @@ func run(args []string) int {
 		return runLLMConnect(c, cmd.channel)
 	case "llm-set-default":
 		return runLLMSetDefault(cmd.channel)
+	case "pairing-list":
+		ps, err := c.Pairings("telegram")
+		if err != nil {
+			return fail(err)
+		}
+		if len(ps) == 0 {
+			fmt.Println(dimStyle.Render("no pairings yet — message the bot to get a code"))
+			return 0
+		}
+		for _, p := range ps {
+			fmt.Println(renderPairing(p))
+		}
+	case "pairing-approve":
+		p, err := c.ApprovePairing(cmd.channel, cmd.arg)
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Println(okStyle.Render("✓") + " approved " + selectedStyle.Render(p.UserID) + " — they can talk to the bot now")
+	case "pairing-revoke":
+		if err := c.RevokePairing(cmd.channel, cmd.arg); err != nil {
+			return fail(err)
+		}
+		fmt.Println(okStyle.Render("✓") + " revoked " + selectedStyle.Render(cmd.arg))
 	}
 	return 0
 }

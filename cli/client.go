@@ -99,6 +99,29 @@ func (c *Client) Connect(name, token string) (Channel, error) {
 	return ch, err
 }
 
+// Pairing mirrors the server's pairing JSON.
+type Pairing struct {
+	UserID   string `json:"user_id"`
+	Code     string `json:"code"`
+	Approved bool   `json:"approved"`
+}
+
+func (c *Client) Pairings(channel string) ([]Pairing, error) {
+	var ps []Pairing
+	err := c.do(http.MethodGet, "/pairing/"+channel, nil, &ps)
+	return ps, err
+}
+
+func (c *Client) ApprovePairing(channel, code string) (Pairing, error) {
+	var p Pairing
+	err := c.do(http.MethodPost, "/pairing/"+channel+"/approve", map[string]string{"code": code}, &p)
+	return p, err
+}
+
+func (c *Client) RevokePairing(channel, userID string) error {
+	return c.do(http.MethodPost, "/pairing/"+channel+"/revoke", map[string]string{"user_id": userID}, nil)
+}
+
 func (c *Client) LLMs() ([]LLM, error) {
 	var ls []LLM
 	err := c.do(http.MethodGet, "/llm", nil, &ls)
