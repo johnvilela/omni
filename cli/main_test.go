@@ -14,17 +14,22 @@ func TestRoute(t *testing.T) {
 		args    []string
 		name    string
 		channel string
+		topic   string
 		wantErr bool
 	}{
-		{[]string{}, "help", "", false},
-		{[]string{"help"}, "help", "", false},
-		{[]string{"--help"}, "help", "", false},
-		{[]string{"-h"}, "help", "", false},
-		{[]string{"channels"}, "list", "", false},
-		{[]string{"channels", "telegram"}, "detail", "telegram", false},
-		{[]string{"channels", "connect"}, "connect", "", false},
-		{[]string{"channels", "connect", "-c", "telegram"}, "connect", "telegram", false},
-		{[]string{"frobnicate"}, "", "", true},
+		{[]string{}, "help", "", "", false},
+		{[]string{"help"}, "help", "", "", false},
+		{[]string{"--help"}, "help", "", "", false},
+		{[]string{"-h"}, "help", "", "", false},
+		{[]string{"channels"}, "list", "", "", false},
+		{[]string{"channels", "--help"}, "help", "", "channels", false},
+		{[]string{"channels", "-h"}, "help", "", "channels", false},
+		{[]string{"channels", "telegram"}, "detail", "telegram", "", false},
+		{[]string{"channels", "connect"}, "connect", "", "", false},
+		{[]string{"channels", "connect", "-c", "telegram"}, "connect", "telegram", "", false},
+		{[]string{"channels", "connect", "--help"}, "help", "", "connect", false},
+		{[]string{"channels", "connect", "-c", "telegram", "-h"}, "help", "", "connect", false},
+		{[]string{"frobnicate"}, "", "", "", true},
 	}
 	for _, c := range cases {
 		cmd, err := route(c.args)
@@ -32,8 +37,8 @@ func TestRoute(t *testing.T) {
 			t.Errorf("route(%v) err = %v, wantErr %v", c.args, err, c.wantErr)
 			continue
 		}
-		if err == nil && (cmd.name != c.name || cmd.channel != c.channel) {
-			t.Errorf("route(%v) = %+v, want {%s %s}", c.args, cmd, c.name, c.channel)
+		if err == nil && (cmd.name != c.name || cmd.channel != c.channel || cmd.topic != c.topic) {
+			t.Errorf("route(%v) = %+v, want {%s %s %s}", c.args, cmd, c.name, c.channel, c.topic)
 		}
 	}
 }
@@ -77,14 +82,37 @@ func TestSaveToken(t *testing.T) {
 	}
 }
 
-func TestHelpMentionsCommands(t *testing.T) {
-	h := helpText()
-	for _, want := range []string{"omni channels", "connect", "-c", "help"} {
-		if !strings.Contains(h, want) {
-			t.Errorf("help missing %q", want)
+func TestHelpScreens(t *testing.T) {
+	root := helpText()
+	for _, want := range []string{"omni channels", "--help", "-server"} {
+		if !strings.Contains(root, want) {
+			t.Errorf("root help missing %q", want)
 		}
 	}
-	if !strings.Contains(h, "██") {
-		t.Error("help missing ASCII art banner")
+	if !strings.Contains(root, "██") {
+		t.Error("root help missing ASCII art banner")
+	}
+	if strings.Contains(root, "-c telegram") {
+		t.Error("root help should not list subcommand flags")
+	}
+
+	ch := helpChannels()
+	for _, want := range []string{"connect", "<name>", "omni channels telegram"} {
+		if !strings.Contains(ch, want) {
+			t.Errorf("channels help missing %q", want)
+		}
+	}
+	if strings.Contains(ch, "██") {
+		t.Error("channels help should not have the banner")
+	}
+
+	co := helpConnect()
+	for _, want := range []string{"-c", "connect -c telegram", "TELEGRAM_BOT_TOKEN"} {
+		if !strings.Contains(co, want) {
+			t.Errorf("connect help missing %q", want)
+		}
+	}
+	if strings.Contains(co, "██") {
+		t.Error("connect help should not have the banner")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ var (
 type command struct {
 	name    string // help | list | detail | connect
 	channel string
+	topic   string // for help: "" (root) | channels | connect
 }
 
 func route(args []string) (command, error) {
@@ -37,10 +39,17 @@ func route(args []string) (command, error) {
 		if len(args) == 1 {
 			return command{name: "list"}, nil
 		}
-		if args[1] == "connect" {
+		switch args[1] {
+		case "--help", "-h":
+			return command{name: "help", topic: "channels"}, nil
+		case "connect":
 			fs := flag.NewFlagSet("connect", flag.ContinueOnError)
+			fs.SetOutput(io.Discard) // we print our own help, not flag's usage dump
 			c := fs.String("c", "", "channel to connect")
 			if err := fs.Parse(args[2:]); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return command{name: "help", topic: "connect"}, nil
+				}
 				return command{}, err
 			}
 			return command{name: "connect", channel: *c}, nil
@@ -149,7 +158,14 @@ func run(args []string) int {
 	c := NewClient(serverURL())
 	switch cmd.name {
 	case "help":
-		fmt.Print(helpText())
+		switch cmd.topic {
+		case "channels":
+			fmt.Print(helpChannels())
+		case "connect":
+			fmt.Print(helpConnect())
+		default:
+			fmt.Print(helpText())
+		}
 	case "list":
 		chs, err := c.Channels()
 		if err != nil {
