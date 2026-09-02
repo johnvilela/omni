@@ -1,15 +1,19 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"gopkg.in/yaml.v3"
@@ -135,6 +139,39 @@ func route(args []string) (command, error) {
 			return command{name: "pairing-" + args[1], channel: rest[0], arg: rest[1]}, nil
 		}
 		return command{}, fmt.Errorf("unknown subcommand %q — try `omni pairing --help`", args[1])
+	case "guardian":
+		if len(args) == 1 {
+			return command{name: "guardian-status"}, nil
+		}
+		switch args[1] {
+		case "--help", "-h":
+			return command{name: "help", topic: "guardian"}, nil
+		case "set-interval":
+			rest := args[2:]
+			if slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
+				return command{name: "help", topic: "guardian"}, nil
+			}
+			if len(rest) != 1 {
+				return command{}, fmt.Errorf("usage: omni guardian set-interval <duration>  (e.g. 2m, 15m, 1h)")
+			}
+			return command{name: "guardian-interval", arg: rest[0]}, nil
+		}
+		fs := flag.NewFlagSet("guardian", flag.ContinueOnError)
+		fs.SetOutput(io.Discard) // we print our own help, not flag's usage dump
+		en := fs.String("enabled", "", "true|false")
+		if err := fs.Parse(args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return command{name: "help", topic: "guardian"}, nil
+			}
+			return command{}, err
+		}
+		switch *en {
+		case "true", "false":
+			return command{name: "guardian-enable", arg: *en}, nil
+		case "":
+			return command{}, fmt.Errorf("unknown subcommand %q — try `omni guardian --help`", args[1])
+		}
+		return command{}, fmt.Errorf("--enabled must be true or false")
 	}
 	return command{}, fmt.Errorf("unknown command %q — try `omni help`", args[0])
 }
@@ -204,6 +241,9 @@ func renderLLM(l LLM) string {
 	}
 	if l.Default {
 		s += " " + selectedStyle.Render("★ default")
+	}
+	if l.BudgetNote != "" {
+		s += "\n    " + warnStyle.Render("! "+l.BudgetNote)
 	}
 	return s
 }
@@ -396,6 +436,98 @@ func runLLMModel(c *Client, provider, model, effort string) int {
 	return 0
 }
 
+// The guardian (<app>-guardian binary) runs as a systemd user timer; these
+// subcommands just drive systemctl locally — no server API involved.
+
+func guardianTimer() string { return app + "-guardian.timer" }
+
+func systemctlUser(args ...string) (string, error) {
+	out, err := exec.Command("systemctl", append([]string{"--user"}, args...)...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func runGuardianStatus() int {
+	timer := guardianTimer()
+	switch enabled, _ := systemctlUser("is-enabled", timer); enabled {
+	case "enabled":
+		fmt.Println(okStyle.Render("●") + " " + timer + " — enabled")
+		if line, err := systemctlUser("list-timers", timer, "--no-pager", "--no-legend"); err == nil && line != "" {
+			fmt.Println(dimStyle.Render("  " + line))
+		}
+	case "disabled":
+		fmt.Println(dimStyle.Render("○ "+timer+" — disabled") + " · re-arm with " + cmdStyle.Render("omni guardian --enabled=true"))
+	default:
+		fmt.Println(dimStyle.Render("○ " + timer + " — not installed (run scripts/install.sh)"))
+	}
+
+	// active alerts = the guardian's persisted red checks
+	dir := os.Getenv("XDG_DATA_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".local", "share")
+	}
+	st := map[string]string{}
+	if data, err := os.ReadFile(filepath.Join(dir, app, "guardian.json")); err == nil {
+		json.Unmarshal(data, &st)
+	}
+	if len(st) == 0 {
+		fmt.Println(okStyle.Render("●") + " no active alerts")
+		return 0
+	}
+	for _, name := range slices.Sorted(maps.Keys(st)) {
+		fmt.Println(warnStyle.Render("! " + name + " — red since " + st[name]))
+	}
+	return 0
+}
+
+func runGuardianInterval(arg string) int {
+	d, err := time.ParseDuration(arg)
+	if err != nil || d < 30*time.Second {
+		fmt.Fprintln(os.Stderr, errStyle.Render("interval must be a duration of at least 30s (e.g. 2m, 15m, 1h)"))
+		return 2
+	}
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return fail(err)
+	}
+	// drop-in override: survives install.sh rewriting the base timer unit
+	dropDir := filepath.Join(cfgDir, "systemd", "user", guardianTimer()+".d")
+	if err := os.MkdirAll(dropDir, 0o755); err != nil {
+		return fail(err)
+	}
+	conf := "[Timer]\nOnUnitActiveSec=\nOnUnitActiveSec=" + arg + "\n"
+	if err := os.WriteFile(filepath.Join(dropDir, "override.conf"), []byte(conf), 0o644); err != nil {
+		return fail(err)
+	}
+	if out, err := systemctlUser("daemon-reload"); err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("systemctl daemon-reload failed: "+out))
+		return 1
+	}
+	if out, err := systemctlUser("restart", guardianTimer()); err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("could not restart "+guardianTimer()+": "+out+" — is the guardian installed?"))
+		return 1
+	}
+	fmt.Println(okStyle.Render("✓") + " guardian checks every " + selectedStyle.Render(arg))
+	return 0
+}
+
+func runGuardianEnable(on bool) int {
+	action := "disable"
+	if on {
+		action = "enable"
+	}
+	if out, err := systemctlUser(action, "--now", guardianTimer()); err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("systemctl "+action+" failed: "+out+" — is the guardian installed? (scripts/install.sh)"))
+		return 1
+	}
+	if on {
+		fmt.Println(okStyle.Render("✓") + " guardian enabled — checks resume on schedule")
+	} else {
+		fmt.Println(okStyle.Render("✓") + " guardian disabled — no checks, no alerts until re-enabled")
+	}
+	return 0
+}
+
 func run(args []string) int {
 	cmd, err := route(args)
 	if err != nil {
@@ -422,6 +554,8 @@ func run(args []string) int {
 			fmt.Print(helpLLMModel())
 		case "pairing":
 			fmt.Print(helpPairing())
+		case "guardian":
+			fmt.Print(helpGuardian())
 		default:
 			fmt.Print(helpText())
 		}
@@ -486,6 +620,12 @@ func run(args []string) int {
 			return fail(err)
 		}
 		fmt.Println(okStyle.Render("✓") + " revoked " + selectedStyle.Render(cmd.arg))
+	case "guardian-status":
+		return runGuardianStatus()
+	case "guardian-interval":
+		return runGuardianInterval(cmd.arg)
+	case "guardian-enable":
+		return runGuardianEnable(cmd.arg == "true")
 	}
 	return 0
 }

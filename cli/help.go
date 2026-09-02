@@ -28,6 +28,7 @@ func helpText() string {
 		row("omni channels", "manage message channels") +
 		row("omni llm", "manage llm providers (openai, claude, gemini)") +
 		row("omni pairing", "control who may talk to the bot") +
+		row("omni guardian", "watchdog status, check interval and on/off") +
 		row("omni help", "show this help (also: omni --help, omni -h)") +
 		"\n" + helpStyle.Render("      run `omni <command> --help` for flags, subcommands and examples") + "\n" +
 		"\n" + titleStyle.Render("  SERVER") + "\n\n" +
@@ -54,6 +55,23 @@ func helpPairing() string {
 		"      omni pairing revoke telegram 123456789\n\n" +
 		helpStyle.Render("      an unpaired user who messages the bot receives a pairing code;\n"+
 			"      the bot answers nothing else until you approve it") + "\n\n"
+}
+
+func helpGuardian() string {
+	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
+		"      " + cmdStyle.Render("omni guardian [set-interval <duration> | --enabled=<bool>]") + "\n\n" +
+		titleStyle.Render("  SUBCOMMANDS") + "\n\n" +
+		row("omni guardian", "watchdog status: timer, next run, active alerts") +
+		row("omni guardian set-interval <duration>", "change the check cadence (default 2m)") +
+		row("omni guardian --enabled=false", "stop the periodic checks (true re-arms them)") +
+		"\n" + titleStyle.Render("  EXAMPLES") + "\n\n" +
+		"      omni guardian set-interval 5m\n" +
+		"      omni guardian --enabled=false\n\n" +
+		helpStyle.Render("      the guardian ("+app+"-guardian.timer) watches disk, memory, load,\n"+
+			"      network, telegram, agent processes, the database and the server —\n"+
+			"      restarting "+app+"-server if it stops responding — and alerts every\n"+
+			"      approved telegram pairing once per incident, plus a recovery notice.\n"+
+			"      logs: journalctl --user -u "+app+"-guardian") + "\n\n"
 }
 
 func helpChannels() string {

@@ -25,18 +25,27 @@ if [[ $DEV_ONLY == 1 ]]; then
 fi
 
 # both prod and dev run as systemd user services ($app-server.service)
+# plus the $app-guardian.timer watchdog
 for a in "${apps[@]}"; do
-  unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$a-server.service"
+  UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  unit="$UNIT_DIR/$a-server.service"
   if [[ -f "$unit" ]]; then
     systemctl --user disable --now "$a-server.service" 2>/dev/null || true
     rm -f "$unit"
     systemctl --user daemon-reload
     echo "removed service $a-server"
   fi
+  if [[ -f "$UNIT_DIR/$a-guardian.timer" ]]; then
+    systemctl --user disable --now "$a-guardian.timer" 2>/dev/null || true
+    rm -f "$UNIT_DIR/$a-guardian.timer" "$UNIT_DIR/$a-guardian.service"
+    rm -rf "$UNIT_DIR/$a-guardian.timer.d"
+    systemctl --user daemon-reload
+    echo "removed timer $a-guardian"
+  fi
 done
 
 for a in "${apps[@]}"; do
-  for f in "$BIN/$a" "$BIN/$a-server"; do
+  for f in "$BIN/$a" "$BIN/$a-server" "$BIN/$a-guardian"; do
     if [[ -f "$f" ]]; then
       rm -f "$f"
       echo "removed $f"

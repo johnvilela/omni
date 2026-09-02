@@ -12,7 +12,7 @@ APP=omni-dev ADDR=:8788 scripts/build.sh
 
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
-install -m755 bin/omni-dev bin/omni-dev-server "$BIN/"
+install -m755 bin/omni-dev bin/omni-dev-server bin/omni-dev-guardian "$BIN/"
 
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$UNIT_DIR"
@@ -29,15 +29,41 @@ Restart=on-failure
 WantedBy=default.target
 EOF
 
+cat > "$UNIT_DIR/omni-dev-guardian.service" <<'EOF'
+[Unit]
+Description=Omni dev guardian
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/omni-dev-guardian
+EOF
+
+cat > "$UNIT_DIR/omni-dev-guardian.timer" <<'EOF'
+[Unit]
+Description=Omni dev guardian timer
+
+[Timer]
+# OnActiveSec, not OnBootSec: first run 2min after the timer is enabled, so
+# an install never probes the server it just restarted mid-startup
+OnActiveSec=2min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl --user daemon-reload
 systemctl --user enable omni-dev-server.service
 systemctl --user restart omni-dev-server.service
+systemctl --user enable omni-dev-guardian.timer
+systemctl --user restart omni-dev-guardian.timer
 
 case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "warning: $BIN is not in your PATH" ;;
 esac
 
-echo "==> installed $BIN/omni-dev and $BIN/omni-dev-server"
+echo "==> installed $BIN/omni-dev, $BIN/omni-dev-server and $BIN/omni-dev-guardian"
 echo "==> service omni-dev-server: $(systemctl --user is-active omni-dev-server.service)"
-echo "    logs: journalctl --user -u omni-dev-server -f"
+echo "==> timer omni-dev-guardian: $(systemctl --user is-active omni-dev-guardian.timer)"
+echo "    logs: journalctl --user -u omni-dev-server -f · guardian: journalctl --user -u omni-dev-guardian"

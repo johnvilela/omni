@@ -13,7 +13,7 @@ PROD=1 scripts/build.sh
 
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
-install -m755 bin/omni bin/omni-server "$BIN/"
+install -m755 bin/omni bin/omni-server bin/omni-guardian "$BIN/"
 
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$UNIT_DIR"
@@ -30,9 +30,36 @@ Restart=on-failure
 WantedBy=default.target
 EOF
 
+# guardian: oneshot watchdog fired by a timer; interval is overridable via
+# `omni guardian set-interval` (drop-in), so only the base units live here
+cat > "$UNIT_DIR/omni-guardian.service" <<'EOF'
+[Unit]
+Description=Omni guardian
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/omni-guardian
+EOF
+
+cat > "$UNIT_DIR/omni-guardian.timer" <<'EOF'
+[Unit]
+Description=Omni guardian timer
+
+[Timer]
+# OnActiveSec, not OnBootSec: first run 2min after the timer is enabled, so
+# an install never probes the server it just restarted mid-startup
+OnActiveSec=2min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl --user daemon-reload
 systemctl --user enable omni-server.service
 systemctl --user restart omni-server.service
+systemctl --user enable omni-guardian.timer
+systemctl --user restart omni-guardian.timer
 
 case ":$PATH:" in
   *":$BIN:"*) ;;
@@ -86,5 +113,6 @@ if command -v memoria >/dev/null; then
   fi
 fi
 
-echo "==> installed $BIN/omni and $BIN/omni-server"
+echo "==> installed $BIN/omni, $BIN/omni-server and $BIN/omni-guardian"
 echo "==> service omni-server: $(systemctl --user is-active omni-server.service)"
+echo "==> timer omni-guardian: $(systemctl --user is-active omni-guardian.timer)"
