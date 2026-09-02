@@ -88,10 +88,28 @@ func helpLLM() string {
 		row("omni llm <provider>", "show one provider's status") +
 		row("omni llm connect", "connect a provider (see connect --help)") +
 		row("omni llm set-default", "pick the default provider (see set-default --help)") +
+		row("omni llm model", "pick a provider's model (see model --help)") +
 		"\n" + titleStyle.Render("  EXAMPLES") + "\n\n" +
 		"      omni llm openai\n" +
 		"      omni llm connect -p claude\n" +
-		"      omni llm set-default -p claude\n\n"
+		"      omni llm set-default -p claude\n" +
+		"      omni llm model -p claude -m claude-haiku-4-5\n\n"
+}
+
+func helpLLMModel() string {
+	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
+		"      " + cmdStyle.Render("omni llm model [-p <provider>] [-m <model>] [-e <effort>]") + "\n\n" +
+		titleStyle.Render("  FLAGS") + "\n\n" +
+		row("-p <provider>", "provider to configure, skipping the picker") +
+		row("-m <model>", "model to use, skipping the picker") +
+		row("-e <effort>", "reasoning effort: low | medium | high") +
+		"\n" + titleStyle.Render("  EXAMPLES") + "\n\n" +
+		"      omni llm model\n" +
+		"      omni llm model -p openai -m gpt-5-mini -e high\n\n" +
+		helpStyle.Render("      models are listed live from the provider's API; a curated list\n"+
+			"      is used when the provider is connected via a vendor CLI login.\n"+
+			"      saved as <provider>_model / <provider>_effort (e.g. openai_model)\n"+
+			"      in ~/.config/"+app+"/config.yaml") + "\n\n"
 }
 
 func helpLLMSetDefault() string {

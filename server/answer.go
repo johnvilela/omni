@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -21,6 +22,12 @@ var llmModels = map[string]string{
 	"openai": "gpt-4o-mini",
 	"claude": "claude-3-5-haiku-latest",
 	"gemini": "gemini-2.0-flash",
+}
+
+// configuredModel is the model picked via `omni llm model`, "" if unset.
+func configuredModel(provider string) string {
+	cfg := readConfig()
+	return map[string]string{"openai": cfg.OpenAIModel, "claude": cfg.ClaudeModel, "gemini": cfg.GeminiModel}[provider]
 }
 
 // Answer asks the default llm one single-turn question: text in, text out,
@@ -78,23 +85,36 @@ func (s *Server) answerNotice(ctx context.Context, text string) string {
 // host's agent setup must never leak into chat answers, and omni will inject
 // its own tools later.
 func cliArgs(provider, text string) []string {
+	model := configuredModel(provider)
 	switch provider {
 	case "openai":
 		// codex's shell tool can't be disabled; the read-only sandbox
 		// confines it. --ignore-user-config drops MCP servers + hooks but
 		// keeps auth.
-		return []string{"codex", "exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only", text}
+		args := []string{"codex", "exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only"}
+		if model != "" {
+			args = append(args, "-m", model) // before the positional prompt
+		}
+		return append(args, text)
 	case "claude":
 		// prompt before --tools: it's variadic and would swallow a trailing
 		// positional. --setting-sources "" ignores user hooks/settings.
-		return []string{"claude", "-p", text, "--tools", "", "--strict-mcp-config", "--setting-sources", ""}
+		args := []string{"claude", "-p", text, "--tools", "", "--strict-mcp-config", "--setting-sources", ""}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		return args
 	case "gemini":
 		// the MCP allowlist rejects empty names, so allow one that can't
 		// exist — same effect as none. ponytail: gemini's built-in read
 		// tools have no disable flag; mutating tools are auto-denied in
 		// non-interactive mode. Use the policy engine if that ever needs
 		// tightening.
-		return []string{"gemini", "--allowed-mcp-server-names", "omni-none", "-e", "none", "-p", text}
+		args := []string{"gemini", "--allowed-mcp-server-names", "omni-none", "-e", "none"}
+		if model != "" {
+			args = append(args, "-m", model)
+		}
+		return append(args, "-p", text)
 	}
 	return nil
 }
@@ -110,7 +130,18 @@ func runCLI(ctx context.Context, name string, args ...string) (string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%s: %v: %s", name, err, strings.TrimSpace(errb.String()))
+		// stderr can echo the whole composed prompt (codex does — chat
+		// history included), and this error reaches the chat as the reply.
+		// Full dump to the server log; only the last line to the user.
+		stderr := strings.TrimSpace(errb.String())
+		if stderr == "" {
+			return "", fmt.Errorf("%s: %v", name, err)
+		}
+		log.Printf("%s failed: %v\n%s", name, err, stderr)
+		if i := strings.LastIndexByte(stderr, '\n'); i >= 0 {
+			stderr = strings.TrimSpace(stderr[i+1:])
+		}
+		return "", fmt.Errorf("%s: %v: %s", name, err, stderr)
 	}
 	return out.String(), nil
 }
@@ -118,7 +149,10 @@ func runCLI(ctx context.Context, name string, args ...string) (string, error) {
 // askAPI does one plain text-in/text-out call against a provider's HTTP API.
 func askAPI(ctx context.Context, provider, key, text string) (string, error) {
 	base := llmAPIBase(provider)
-	model := llmModels[provider]
+	model := configuredModel(provider)
+	if model == "" {
+		model = llmModels[provider]
+	}
 	var req *http.Request
 	var err error
 	parse := func(*json.Decoder) (string, error) { return "", nil }

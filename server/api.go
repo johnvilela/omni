@@ -165,6 +165,14 @@ func (s *Server) Handler() http.Handler {
 			}
 		}
 	})
+	mux.HandleFunc("GET /llm/{provider}/models", func(w http.ResponseWriter, r *http.Request) {
+		p := r.PathValue("provider")
+		if !slices.Contains(llmProviders, p) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown_provider"})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.listLLMModels(r.Context(), p))
+	})
 	mux.HandleFunc("POST /llm/{provider}/connect", func(w http.ResponseWriter, r *http.Request) {
 		p := r.PathValue("provider")
 		if !slices.Contains(llmProviders, p) {

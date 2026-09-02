@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -18,9 +20,29 @@ type llmStatus struct {
 	Connected bool   `json:"connected"`
 	Source    string `json:"source,omitempty"` // oauth | api_key | claude-code
 	Default   bool   `json:"default,omitempty"`
+	Model     string `json:"model,omitempty"`  // user-picked via `omni llm model`
+	Effort    string `json:"effort,omitempty"` // low | medium | high
 }
 
 var llmProviders = []string{"openai", "claude", "gemini"}
+
+// llmFallbackModels are served when a provider has no api key to list models
+// with (oauth/claude-code sources, or disconnected) or the live fetch fails.
+// ponytail: curated names go stale — refresh when providers ship new
+// generations. Each name must be valid for both the HTTP API and the vendor
+// CLI's model flag.
+var llmFallbackModels = map[string][]string{
+	"openai": {"gpt-5.1", "gpt-5.1-codex", "gpt-5", "gpt-5-mini", "gpt-4.1"},
+	"claude": {"claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-3-5-haiku-latest"},
+	"gemini": {"gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"},
+}
+
+// llmCodexModels replaces the openai fallback when the source is oauth: those
+// answers go through the codex CLI, which on ChatGPT logins accepts only its
+// own picker's models — api-only names like gpt-4.1 get a 400.
+// ponytail: codex has no list-models command; this mirrors its /model picker
+// (codex v0.151) and must be refreshed when codex ships new generations.
+var llmCodexModels = []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 
 var errKeyRequired = apiError{"key_required"}
 
@@ -110,27 +132,34 @@ func llmAPIBase(provider string) string {
 	}[provider]
 }
 
-// validateLLMKey checks an api key with the cheapest authenticated call each
-// provider has: listing models.
-func validateLLMKey(ctx context.Context, provider, key string) error {
+// modelsRequest builds each provider's list-models call — the cheapest
+// authenticated request they have, used both for key validation and for
+// listing the models themselves.
+func modelsRequest(ctx context.Context, provider, key string) (*http.Request, error) {
 	base := llmAPIBase(provider)
-	var req *http.Request
-	var err error
 	switch provider {
 	case "openai":
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+key)
 		}
+		return req, err
 	case "claude":
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
 		if err == nil {
 			req.Header.Set("x-api-key", key)
 			req.Header.Set("anthropic-version", "2023-06-01")
 		}
+		return req, err
 	case "gemini":
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1beta/models?key="+url.QueryEscape(key), nil)
+		return http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1beta/models?key="+url.QueryEscape(key), nil)
 	}
+	return nil, fmt.Errorf("unknown provider %q", provider)
+}
+
+// validateLLMKey checks an api key by listing models.
+func validateLLMKey(ctx context.Context, provider, key string) error {
+	req, err := modelsRequest(ctx, provider, key)
 	if err != nil {
 		return err
 	}
@@ -145,18 +174,79 @@ func validateLLMKey(ctx context.Context, provider, key string) error {
 	return nil
 }
 
+// listLLMModels returns the chat models a provider offers: live from its API
+// when an api key is in use, the curated fallback otherwise (oauth sources
+// have no key to list with; fetch errors degrade to the fallback too).
+func (s *Server) listLLMModels(ctx context.Context, provider string) []string {
+	source, key := resolveLLM(provider, "")
+	if source != "api_key" {
+		if provider == "openai" && source == "oauth" {
+			return llmCodexModels // oauth answers go through codex
+		}
+		return llmFallbackModels[provider]
+	}
+	req, err := modelsRequest(ctx, provider, key)
+	if err != nil {
+		return llmFallbackModels[provider]
+	}
+	resp, err := llmHTTP.Do(req)
+	if err != nil {
+		return llmFallbackModels[provider]
+	}
+	defer resp.Body.Close()
+	// one struct covers all three shapes: openai/anthropic use data[].id,
+	// gemini uses models[].name
+	var r struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Models []struct {
+			Name    string   `json:"name"`
+			Methods []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&r) != nil {
+		return llmFallbackModels[provider]
+	}
+	var models []string
+	for _, m := range r.Data {
+		// ponytail: naive prefix filter — openai's list mixes in whisper/tts/
+		// dall-e/embeddings and the CLI picker has no viewport; loosen if
+		// someone needs an edge model.
+		if provider == "openai" && !strings.HasPrefix(m.ID, "gpt-") &&
+			!(len(m.ID) > 1 && m.ID[0] == 'o' && m.ID[1] >= '0' && m.ID[1] <= '9') {
+			continue
+		}
+		models = append(models, m.ID)
+	}
+	for _, m := range r.Models {
+		if !slices.Contains(m.Methods, "generateContent") {
+			continue
+		}
+		models = append(models, strings.TrimPrefix(m.Name, "models/"))
+	}
+	if len(models) == 0 {
+		return llmFallbackModels[provider]
+	}
+	return models
+}
+
 // llmStatuses reports every provider: connected means the user connected it
 // AND its credentials still resolve; source is what would be used right now.
 // With no default_llm configured and exactly one provider connected, that one
 // is the implied default.
 func (s *Server) llmStatuses() []llmStatus {
-	def := readConfig().DefaultLLM
+	cfg := readConfig()
+	def := cfg.DefaultLLM
+	models := map[string]string{"openai": cfg.OpenAIModel, "claude": cfg.ClaudeModel, "gemini": cfg.GeminiModel}
+	efforts := map[string]string{"openai": cfg.OpenAIEffort, "claude": cfg.ClaudeEffort, "gemini": cfg.GeminiEffort}
 	sts := make([]llmStatus, len(llmProviders))
 	onCount, onIdx := 0, -1
 	for i, p := range llmProviders {
 		source, _ := resolveLLM(p, "")
 		on, _ := s.store.Connected("llm:" + p)
-		sts[i] = llmStatus{Name: p, Connected: on && source != "", Source: source, Default: def == p}
+		sts[i] = llmStatus{Name: p, Connected: on && source != "", Source: source, Default: def == p,
+			Model: models[p], Effort: efforts[p]}
 		if sts[i].Connected {
 			onCount++
 			onIdx = i

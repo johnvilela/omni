@@ -22,6 +22,8 @@ type LLM struct {
 	Connected bool   `json:"connected"`
 	Source    string `json:"source"`
 	Default   bool   `json:"default"`
+	Model     string `json:"model"`
+	Effort    string `json:"effort"`
 }
 
 // ErrTokenRequired means the server has no bot token; prompt the user.
@@ -132,6 +134,12 @@ func (c *Client) LLM(name string) (LLM, error) {
 	var l LLM
 	err := c.do(http.MethodGet, "/llm/"+name, nil, &l)
 	return l, err
+}
+
+func (c *Client) LLMModels(name string) ([]string, error) {
+	var ms []string
+	err := c.do(http.MethodGet, "/llm/"+name+"/models", nil, &ms)
+	return ms, err
 }
 
 func (c *Client) ConnectLLM(name, key string) (LLM, error) {

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -23,15 +25,18 @@ func newLLMTestServer(t *testing.T) (*Server, *Store) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") == "Bearer GOOD" || r.Header.Get("x-api-key") == "GOOD" {
-			fmt.Fprint(w, `{"data":[]}`)
-			return
+		switch {
+		case r.Header.Get("Authorization") == "Bearer GOOD":
+			fmt.Fprint(w, `{"data":[{"id":"gpt-test"},{"id":"whisper-1"},{"id":"o3-mini"}]}`)
+		case r.Header.Get("x-api-key") == "GOOD":
+			fmt.Fprint(w, `{"data":[{"id":"claude-test"}]}`)
+		default:
+			w.WriteHeader(401)
 		}
-		w.WriteHeader(401)
 	})
 	mux.HandleFunc("/v1beta/models", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("key") == "GOOD" {
-			fmt.Fprint(w, `{"models":[]}`)
+			fmt.Fprint(w, `{"models":[{"name":"models/gemini-test","supportedGenerationMethods":["generateContent"]},{"name":"models/embedding-test","supportedGenerationMethods":["embedContent"]}]}`)
 			return
 		}
 		w.WriteHeader(401)
@@ -257,6 +262,94 @@ func TestLLMDefault(t *testing.T) {
 	_, obj, _ := doJSON(t, h, "GET", "/llm/openai", "")
 	if _, ok := obj["default"]; ok {
 		t.Fatalf("non-default provider should omit the default field: %v", obj)
+	}
+}
+
+func TestLLMStatusModelEffort(t *testing.T) {
+	srv, _ := newLLMTestServer(t)
+	dir, _ := os.UserConfigDir()
+	if err := os.MkdirAll(filepath.Join(dir, app), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"),
+		[]byte("claude_model: claude-test\nclaude_effort: high\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := srv.Handler()
+
+	_, obj, _ := doJSON(t, h, "GET", "/llm/claude", "")
+	if obj["model"] != "claude-test" || obj["effort"] != "high" {
+		t.Fatalf("claude status = %v; want model and effort from config", obj)
+	}
+	_, obj, _ = doJSON(t, h, "GET", "/llm/openai", "")
+	if _, ok := obj["model"]; ok {
+		t.Fatalf("openai status = %v; want model omitted when unset", obj)
+	}
+	if _, ok := obj["effort"]; ok {
+		t.Fatalf("openai status = %v; want effort omitted when unset", obj)
+	}
+}
+
+// getModels fetches GET /llm/{provider}/models and decodes the string array.
+func getModels(t *testing.T, h http.Handler, provider string) (int, []string) {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/llm/"+provider+"/models", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	var ms []string
+	json.Unmarshal(w.Body.Bytes(), &ms)
+	return w.Code, ms
+}
+
+func TestLLMModelsEndpoint(t *testing.T) {
+	srv, _ := newLLMTestServer(t)
+	h := srv.Handler()
+
+	if code, obj, _ := doJSON(t, h, "GET", "/llm/cohere/models", ""); code != 404 || obj["error"] != "unknown_provider" {
+		t.Fatalf("GET /llm/cohere/models = %d, %v; want 404 unknown_provider", code, obj)
+	}
+
+	// no credentials at all: the curated fallback list
+	if code, ms := getModels(t, h, "openai"); code != 200 || !slices.Equal(ms, llmFallbackModels["openai"]) {
+		t.Fatalf("no creds = %d, %v; want fallback %v", code, ms, llmFallbackModels["openai"])
+	}
+
+	// api keys: live lists, noise filtered, gemini prefix stripped
+	t.Setenv("OPENAI_API_KEY", "GOOD")
+	if _, ms := getModels(t, h, "openai"); !slices.Equal(ms, []string{"gpt-test", "o3-mini"}) {
+		t.Fatalf("openai live = %v; want whisper filtered out", ms)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "GOOD")
+	if _, ms := getModels(t, h, "claude"); !slices.Equal(ms, []string{"claude-test"}) {
+		t.Fatalf("claude live = %v", ms)
+	}
+	t.Setenv("GEMINI_API_KEY", "GOOD")
+	if _, ms := getModels(t, h, "gemini"); !slices.Equal(ms, []string{"gemini-test"}) {
+		t.Fatalf("gemini live = %v; want models/ stripped and embeddings filtered", ms)
+	}
+
+	// a bad key (fetch 401s): fallback, not an error
+	t.Setenv("OPENAI_API_KEY", "BAD")
+	if code, ms := getModels(t, h, "openai"); code != 200 || !slices.Equal(ms, llmFallbackModels["openai"]) {
+		t.Fatalf("bad key = %d, %v; want fallback", code, ms)
+	}
+
+	// oauth creds shadow the key: openai answers go through codex, which
+	// (on ChatGPT logins) accepts only its own model set — not the api list
+	t.Setenv("OPENAI_API_KEY", "GOOD")
+	writeCreds(t, filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`)
+	_, ms := getModels(t, h, "openai")
+	if !slices.Equal(ms, llmCodexModels) {
+		t.Fatalf("openai oauth = %v; want the codex list %v", ms, llmCodexModels)
+	}
+	if slices.Contains(ms, "gpt-4.1") {
+		t.Fatalf("openai oauth = %v; gpt-4.1 is api-only, codex rejects it", ms)
+	}
+
+	// claude oauth: the vendor CLI takes the same model ids, plain fallback
+	writeCreds(t, filepath.Join(".claude", ".credentials.json"), `{"claudeAiOauth":{"accessToken":"tok"}}`)
+	if _, ms := getModels(t, h, "claude"); !slices.Equal(ms, llmFallbackModels["claude"]) {
+		t.Fatalf("claude oauth = %v; want fallback", ms)
 	}
 }
 

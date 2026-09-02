@@ -13,6 +13,12 @@ type Config struct {
 	AnthropicKey  string `yaml:"anthropic_key"`
 	GeminiKey     string `yaml:"gemini_key"`
 	DefaultLLM    string `yaml:"default_llm"`
+	OpenAIModel   string `yaml:"openai_model"`
+	ClaudeModel   string `yaml:"claude_model"`
+	GeminiModel   string `yaml:"gemini_model"`
+	OpenAIEffort  string `yaml:"openai_effort"`
+	ClaudeEffort  string `yaml:"claude_effort"`
+	GeminiEffort  string `yaml:"gemini_effort"`
 	TokenBudget   int    `yaml:"token_budget"` // chat history budget in est. tokens; 0 = default
 }
 

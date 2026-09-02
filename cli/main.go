@@ -32,6 +32,8 @@ type command struct {
 	channel string // channel name, or llm provider for the llm-* commands
 	topic   string // for help: "" (root) | status | channels | connect | llm | llm-connect | pairing
 	arg     string // pairing-approve: the code; pairing-revoke: the user id
+	model   string // llm-model: the model id
+	effort  string // llm-model: low | medium | high
 }
 
 func route(args []string) (command, error) {
@@ -99,6 +101,19 @@ func route(args []string) (command, error) {
 				return command{}, err
 			}
 			return command{name: "llm-set-default", channel: *p}, nil
+		case "model":
+			fs := flag.NewFlagSet("model", flag.ContinueOnError)
+			fs.SetOutput(io.Discard) // we print our own help, not flag's usage dump
+			p := fs.String("p", "", "provider")
+			m := fs.String("m", "", "model to use")
+			e := fs.String("e", "", "reasoning effort: low | medium | high")
+			if err := fs.Parse(args[2:]); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return command{name: "help", topic: "llm-model"}, nil
+				}
+				return command{}, err
+			}
+			return command{name: "llm-model", channel: *p, model: *m, effort: *e}, nil
 		}
 		return command{name: "llm-detail", channel: args[1]}, nil
 	case "pairing":
@@ -150,7 +165,7 @@ func saveConfigKey(key, value string) error {
 		return err
 	}
 	path := filepath.Join(dir, "config.yaml")
-	cfg := map[string]string{}
+	cfg := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
 		yaml.Unmarshal(data, &cfg) // unreadable config: start fresh
 	}
@@ -180,6 +195,12 @@ func renderLLM(l LLM) string {
 		}
 	} else {
 		s = dimStyle.Render("○ " + l.Name + " — disconnected")
+	}
+	if l.Model != "" {
+		s += " · " + l.Model
+		if l.Effort != "" {
+			s += dimStyle.Render(" (effort " + l.Effort + ")")
+		}
 	}
 	if l.Default {
 		s += " " + selectedStyle.Render("★ default")
@@ -317,6 +338,64 @@ func runLLMSetDefault(provider string) int {
 	return 0
 }
 
+var llmEfforts = []string{"low", "medium", "high"}
+
+// runLLMModel picks a provider's model (and optional effort) and saves them to
+// config.yaml as <provider>_model / <provider>_effort; the server only reads
+// them, but the model list comes from the server, which needs to be running.
+func runLLMModel(c *Client, provider, model, effort string) int {
+	if effort != "" && !slices.Contains(llmEfforts, effort) {
+		fmt.Fprintln(os.Stderr, errStyle.Render(fmt.Sprintf("unknown effort %q — one of: %s", effort, strings.Join(llmEfforts, ", "))))
+		return 2
+	}
+	if provider == "" {
+		final, err := tea.NewProgram(newSelectModel("Model for which provider", llmProviderNames)).Run()
+		if err != nil {
+			return fail(err)
+		}
+		provider = final.(selectModel).choice
+		if provider == "" {
+			fmt.Println(dimStyle.Render("canceled"))
+			return 1
+		}
+	}
+	if !slices.Contains(llmProviderNames, provider) {
+		fmt.Fprintln(os.Stderr, errStyle.Render(fmt.Sprintf("unknown provider %q — one of: %s", provider, strings.Join(llmProviderNames, ", "))))
+		return 2
+	}
+	models, err := c.LLMModels(provider)
+	if err != nil {
+		return fail(err)
+	}
+	if model == "" {
+		final, err := tea.NewProgram(newSelectModel(provider+" model", models)).Run()
+		if err != nil {
+			return fail(err)
+		}
+		model = final.(selectModel).choice
+		if model == "" {
+			fmt.Println(dimStyle.Render("canceled"))
+			return 1
+		}
+	}
+	if !slices.Contains(models, model) {
+		fmt.Fprintln(os.Stderr, errStyle.Render(fmt.Sprintf("unknown model %q for %s — one of: %s", model, provider, strings.Join(models, ", "))))
+		return 2
+	}
+	if err := saveConfigKey(provider+"_model", model); err != nil {
+		return fail(err)
+	}
+	out := okStyle.Render("✓") + " " + provider + " model set to " + selectedStyle.Render(model)
+	if effort != "" {
+		if err := saveConfigKey(provider+"_effort", effort); err != nil {
+			return fail(err)
+		}
+		out += dimStyle.Render(" · effort " + effort)
+	}
+	fmt.Println(out)
+	return 0
+}
+
 func run(args []string) int {
 	cmd, err := route(args)
 	if err != nil {
@@ -339,6 +418,8 @@ func run(args []string) int {
 			fmt.Print(helpLLMConnect())
 		case "llm-set-default":
 			fmt.Print(helpLLMSetDefault())
+		case "llm-model":
+			fmt.Print(helpLLMModel())
 		case "pairing":
 			fmt.Print(helpPairing())
 		default:
@@ -380,6 +461,8 @@ func run(args []string) int {
 		return runLLMConnect(c, cmd.channel)
 	case "llm-set-default":
 		return runLLMSetDefault(cmd.channel)
+	case "llm-model":
+		return runLLMModel(c, cmd.channel, cmd.model, cmd.effort)
 	case "pairing-list":
 		ps, err := c.Pairings("telegram")
 		if err != nil {

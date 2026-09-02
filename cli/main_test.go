@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +42,9 @@ func TestRoute(t *testing.T) {
 		{[]string{"llm", "set-default"}, "llm-set-default", "", "", false},
 		{[]string{"llm", "set-default", "-p", "openai"}, "llm-set-default", "openai", "", false},
 		{[]string{"llm", "set-default", "--help"}, "help", "", "llm-set-default", false},
+		{[]string{"llm", "model"}, "llm-model", "", "", false},
+		{[]string{"llm", "model", "-p", "openai"}, "llm-model", "openai", "", false},
+		{[]string{"llm", "model", "--help"}, "help", "", "llm-model", false},
 		{[]string{"pairing"}, "pairing-list", "", "", false},
 		{[]string{"pairing", "--help"}, "help", "", "pairing", false},
 		{[]string{"pairing", "-h"}, "help", "", "pairing", false},
@@ -71,6 +77,12 @@ func TestRoute(t *testing.T) {
 	cmd, err = route([]string{"pairing", "revoke", "telegram", "99"})
 	if err != nil || cmd.name != "pairing-revoke" || cmd.channel != "telegram" || cmd.arg != "99" {
 		t.Errorf("route(pairing revoke) = %+v, %v", cmd, err)
+	}
+
+	// llm model carries model and effort in their own fields
+	cmd, err = route([]string{"llm", "model", "-p", "openai", "-m", "gpt-test", "-e", "high"})
+	if err != nil || cmd.name != "llm-model" || cmd.channel != "openai" || cmd.model != "gpt-test" || cmd.effort != "high" {
+		t.Errorf("route(llm model -p -m -e) = %+v, %v", cmd, err)
 	}
 }
 
@@ -111,6 +123,14 @@ func TestSaveConfigKey(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 
+	dir := filepath.Join(tmp, "omni")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("token_budget: 9000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := saveConfigKey("telegram_token", "123:abc"); err != nil {
 		t.Fatalf("saveConfigKey: %v", err)
 	}
@@ -122,9 +142,12 @@ func TestSaveConfigKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config not written: %v", err)
 	}
-	var cfg map[string]string
+	var cfg map[string]any
 	if yaml.Unmarshal(data, &cfg) != nil || cfg["telegram_token"] != "123:abc" || cfg["openai_key"] != "sk-test" {
 		t.Fatalf("config content = %q, want both keys to survive", data)
+	}
+	if cfg["token_budget"] != 9000 {
+		t.Fatalf("token_budget = %v, want the int key to survive rewrites; config = %q", cfg["token_budget"], data)
 	}
 	info, _ := os.Stat(path)
 	if info.Mode().Perm() != 0o600 {
@@ -175,6 +198,15 @@ func TestRenderLLM(t *testing.T) {
 	if !strings.Contains(def, "default") {
 		t.Errorf("renderLLM default missing marker: %q", def)
 	}
+	withModel := renderLLM(LLM{Name: "claude", Connected: true, Source: "oauth", Model: "claude-test", Effort: "high"})
+	for _, want := range []string{"claude-test", "effort high"} {
+		if !strings.Contains(withModel, want) {
+			t.Errorf("renderLLM with model missing %q in %q", want, withModel)
+		}
+	}
+	if strings.Contains(got, "effort") {
+		t.Errorf("renderLLM without model/effort should not mention effort: %q", got)
+	}
 }
 
 func TestRunLLMSetDefault(t *testing.T) {
@@ -203,6 +235,56 @@ func TestRunLLMSetDefault(t *testing.T) {
 	cfg = nil
 	if yaml.Unmarshal(data, &cfg) != nil || cfg["default_llm"] != "gemini" {
 		t.Fatalf("unknown provider must not overwrite the default; config = %q", data)
+	}
+}
+
+func TestRunLLMModel(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/llm/openai/models" {
+			w.WriteHeader(404)
+			return
+		}
+		fmt.Fprint(w, `["gpt-test","gpt-other"]`)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+
+	readCfg := func() map[string]string {
+		data, _ := os.ReadFile(filepath.Join(tmp, "omni", "config.yaml"))
+		var cfg map[string]string
+		yaml.Unmarshal(data, &cfg)
+		return cfg
+	}
+
+	if code := runLLMModel(c, "openai", "gpt-test", "high"); code != 0 {
+		t.Fatalf("valid model+effort = %d, want 0", code)
+	}
+	if cfg := readCfg(); cfg["openai_model"] != "gpt-test" || cfg["openai_effort"] != "high" {
+		t.Fatalf("config = %v, want openai_model and openai_effort saved", cfg)
+	}
+
+	if code := runLLMModel(c, "openai", "gpt-other", ""); code != 0 {
+		t.Fatalf("valid model without effort = %d, want 0", code)
+	}
+	if cfg := readCfg(); cfg["openai_model"] != "gpt-other" || cfg["openai_effort"] != "high" {
+		t.Fatalf("config = %v, want model updated and prior effort untouched", cfg)
+	}
+
+	if code := runLLMModel(c, "openai", "bogus", ""); code != 2 {
+		t.Fatalf("unknown model = %d, want 2", code)
+	}
+	if cfg := readCfg(); cfg["openai_model"] != "gpt-other" {
+		t.Fatalf("unknown model must not overwrite the config; got %v", cfg)
+	}
+
+	if code := runLLMModel(c, "cohere", "gpt-test", ""); code != 2 {
+		t.Fatalf("unknown provider = %d, want 2", code)
+	}
+	if code := runLLMModel(c, "openai", "gpt-test", "extreme"); code != 2 {
+		t.Fatalf("unknown effort = %d, want 2", code)
 	}
 }
 
@@ -261,7 +343,7 @@ func TestHelpScreens(t *testing.T) {
 	}
 
 	llm := helpLLM()
-	for _, want := range []string{"connect", "set-default", "<provider>", "omni llm openai"} {
+	for _, want := range []string{"connect", "set-default", "model", "<provider>", "omni llm openai"} {
 		if !strings.Contains(llm, want) {
 			t.Errorf("llm help missing %q", want)
 		}
@@ -278,6 +360,16 @@ func TestHelpScreens(t *testing.T) {
 	}
 	if strings.Contains(sd, "██") {
 		t.Error("set-default help should not have the banner")
+	}
+
+	lm := helpLLMModel()
+	for _, want := range []string{"-p", "-m", "-e", "low", "high", "openai_model"} {
+		if !strings.Contains(lm, want) {
+			t.Errorf("llm model help missing %q", want)
+		}
+	}
+	if strings.Contains(lm, "██") {
+		t.Error("llm model help should not have the banner")
 	}
 
 	lc := helpLLMConnect()
