@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 type channelStatus struct {
@@ -25,6 +26,8 @@ type Server struct {
 
 	pairMu   sync.Mutex
 	pairHits map[int64]*pairHit
+
+	digesting atomic.Bool // one long-term memory digest in flight at a time
 }
 
 func NewServer(store *Store, telegramAPIBase string) *Server {

@@ -23,7 +23,9 @@ var llmModels = map[string]string{
 	"gemini": "gemini-2.0-flash",
 }
 
-// Answer asks the default llm to answer text. Single-turn, no history.
+// Answer asks the default llm one single-turn question: text in, text out,
+// no history. The chat flow, session naming and the memory digest all build
+// on it; ChatAnswer is the history-aware entry point.
 func (s *Server) Answer(ctx context.Context, text string) (string, error) {
 	var def *llmStatus
 	for _, ls := range s.llmStatuses() {
@@ -46,32 +48,55 @@ func (s *Server) Answer(ctx context.Context, text string) (string, error) {
 	case "api_key":
 		reply, err = askAPI(ctx, def.Name, key, text)
 	case "oauth":
-		cli := map[string][]string{
-			"openai": {"codex", "exec", "--skip-git-repo-check", text},
-			"claude": {"claude", "-p", text},
-			"gemini": {"gemini", "-p", text},
-		}[def.Name]
+		cli := cliArgs(def.Name, text)
 		reply, err = runCLI(ctx, cli[0], cli[1:]...)
 	case "claude-code":
-		reply, err = runCLI(ctx, "claude", "-p", text)
+		cli := cliArgs("claude", text)
+		reply, err = runCLI(ctx, cli[0], cli[1:]...)
 	}
 	if err != nil {
 		return "", err
 	}
-	if reply = strings.TrimSpace(reply); reply == "" {
-		reply = "(empty reply)" // telegram rejects empty text
-	}
-	return reply, nil
+	return strings.TrimSpace(reply), nil
 }
 
-// answerNotice is Answer for the telegram poller: errors become a visible
-// notice instead of silence.
+// answerNotice is the telegram poller's entry point: history-aware, errors
+// become a visible notice instead of silence.
 func (s *Server) answerNotice(ctx context.Context, text string) string {
-	reply, err := s.Answer(ctx, text)
+	reply, err := s.ChatAnswer(ctx, text)
 	if err != nil {
 		return "⚠ " + err.Error()
 	}
+	if reply == "" {
+		return "(empty reply)" // telegram rejects empty text
+	}
 	return reply
+}
+
+// cliArgs builds one vendor CLI invocation. Every CLI runs bare — no MCP
+// servers, no user config/settings/hooks, tools disabled or read-only: the
+// host's agent setup must never leak into chat answers, and omni will inject
+// its own tools later.
+func cliArgs(provider, text string) []string {
+	switch provider {
+	case "openai":
+		// codex's shell tool can't be disabled; the read-only sandbox
+		// confines it. --ignore-user-config drops MCP servers + hooks but
+		// keeps auth.
+		return []string{"codex", "exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only", text}
+	case "claude":
+		// prompt before --tools: it's variadic and would swallow a trailing
+		// positional. --setting-sources "" ignores user hooks/settings.
+		return []string{"claude", "-p", text, "--tools", "", "--strict-mcp-config", "--setting-sources", ""}
+	case "gemini":
+		// the MCP allowlist rejects empty names, so allow one that can't
+		// exist — same effect as none. ponytail: gemini's built-in read
+		// tools have no disable flag; mutating tools are auto-denied in
+		// non-interactive mode. Use the policy engine if that ever needs
+		// tightening.
+		return []string{"gemini", "--allowed-mcp-server-names", "omni-none", "-e", "none", "-p", text}
+	}
+	return nil
 }
 
 // runCLI shells out to a vendor CLI (codex/claude/gemini) whose stored login

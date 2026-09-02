@@ -13,6 +13,7 @@ type Config struct {
 	AnthropicKey  string `yaml:"anthropic_key"`
 	GeminiKey     string `yaml:"gemini_key"`
 	DefaultLLM    string `yaml:"default_llm"`
+	TokenBudget   int    `yaml:"token_budget"` // chat history budget in est. tokens; 0 = default
 }
 
 // readConfig loads ~/.config/omni/config.yaml; zero Config on any error.

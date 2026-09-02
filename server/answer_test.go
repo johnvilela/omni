@@ -66,6 +66,49 @@ func TestAnswerClaudeCode(t *testing.T) {
 	}
 }
 
+// TestAnswerCLIBare locks the security contract of every vendor CLI call:
+// no MCP servers, no user config/settings, tools disabled or read-only. The
+// host's agent setup must never leak into chat answers.
+func TestAnswerCLIBare(t *testing.T) {
+	cases := []struct {
+		provider, rel, creds, bin string
+		want                      []string
+	}{
+		{"openai", filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`, "codex",
+			[]string{"exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only", "ping"}},
+		{"claude", filepath.Join(".claude", ".credentials.json"), `{"claudeAiOauth":{"accessToken":"tok"}}`, "claude",
+			[]string{"-p", "ping", "--tools", "", "--strict-mcp-config", "--setting-sources", ""}},
+		{"gemini", filepath.Join(".gemini", "oauth_creds.json"), `{"access_token":"tok"}`, "gemini",
+			[]string{"--allowed-mcp-server-names", "omni-none", "-e", "none", "-p", "ping"}},
+	}
+	for _, c := range cases {
+		t.Run(c.provider, func(t *testing.T) {
+			srv, _ := newLLMTestServer(t)
+			writeCreds(t, c.rel, c.creds)
+			bin := t.TempDir()
+			argsFile := filepath.Join(bin, "args.txt")
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\necho pong\n"
+			if err := os.WriteFile(filepath.Join(bin, c.bin), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin)
+			if _, code, err := srv.ConnectLLM(context.Background(), c.provider, ""); code != 200 {
+				t.Fatalf("connect = %d, %v", code, err)
+			}
+			if got, err := srv.Answer(context.Background(), "ping"); err != nil || got != "pong" {
+				t.Fatalf("Answer = %q, %v; want pong", got, err)
+			}
+			raw, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(raw) != strings.Join(c.want, "\n")+"\n" {
+				t.Fatalf("cli args = %q; want %q", raw, c.want)
+			}
+		})
+	}
+}
+
 func TestAnswerNotice(t *testing.T) {
 	srv, _ := newLLMTestServer(t)
 	got := srv.answerNotice(context.Background(), "hi")

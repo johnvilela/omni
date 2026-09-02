@@ -55,6 +55,88 @@ func TestStorePairings(t *testing.T) {
 	}
 }
 
+func TestStoreSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "omni.db")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	// empty store has no active session
+	if _, ok, err := s.ActiveSession(); err != nil || ok {
+		t.Fatalf("ActiveSession(empty) = ok %v, %v; want false, nil", ok, err)
+	}
+
+	// max id wins: ids are opaque strings, uuid7 order == lexicographic
+	if err := s.AddSession("a"); err != nil {
+		t.Fatalf("AddSession: %v", err)
+	}
+	if err := s.AddSession("b"); err != nil {
+		t.Fatalf("AddSession: %v", err)
+	}
+	sess, ok, err := s.ActiveSession()
+	if err != nil || !ok || sess.ID != "b" || sess.Name != "" || sess.ConsolidatedUntil != 0 {
+		t.Fatalf("ActiveSession = %+v, ok %v, %v; want fresh session b", sess, ok, err)
+	}
+
+	if err := s.SetSessionName("b", "trip planning"); err != nil {
+		t.Fatalf("SetSessionName: %v", err)
+	}
+	if err := s.SetConsolidatedUntil("b", 7); err != nil {
+		t.Fatalf("SetConsolidatedUntil: %v", err)
+	}
+
+	// survives reopen
+	s.Close()
+	s2, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	sess, _, _ = s2.ActiveSession()
+	if sess.ID != "b" || sess.Name != "trip planning" || sess.ConsolidatedUntil != 7 {
+		t.Fatalf("ActiveSession after reopen = %+v", sess)
+	}
+}
+
+func TestStoreMessages(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	// empty session has no messages
+	if ms, err := s.Messages("a"); err != nil || len(ms) != 0 {
+		t.Fatalf("Messages(empty) = %v, %v; want none", ms, err)
+	}
+
+	// ids increase; sessions are isolated
+	id1, err := s.AddMessage("a", "user", "ping", 100)
+	if err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	id2, _ := s.AddMessage("a", "assistant", "pong", 101)
+	if id2 <= id1 {
+		t.Fatalf("ids not increasing: %d then %d", id1, id2)
+	}
+	if _, err := s.AddMessage("other", "user", "hi", 102); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	ms, err := s.Messages("a")
+	if err != nil || len(ms) != 2 {
+		t.Fatalf("Messages = %v, %v; want 2", ms, err)
+	}
+	if ms[0].Role != "user" || ms[0].Content != "ping" || ms[0].ID != id1 || ms[0].CreatedAt != 100 {
+		t.Fatalf("first message = %+v", ms[0])
+	}
+	if ms[1].Role != "assistant" || ms[1].Content != "pong" {
+		t.Fatalf("second message = %+v", ms[1])
+	}
+}
+
 func TestStoreConnected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "omni.db")
 	s, err := OpenStore(path)

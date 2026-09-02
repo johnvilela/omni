@@ -19,6 +19,10 @@ func OpenStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// ponytail: one connection serializes all access — background goroutines
+	// (session naming, memory digest) would otherwise hit SQLITE_BUSY; switch
+	// to WAL + busy_timeout if contention ever matters.
+	db.SetMaxOpenConns(1)
 	for _, ddl := range []string{
 		`CREATE TABLE IF NOT EXISTS channels (
 			name TEXT PRIMARY KEY,
@@ -30,6 +34,22 @@ func OpenStore(path string) (*Store, error) {
 			code TEXT NOT NULL,
 			approved INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (channel, user_id)
+		)`,
+		// id is a uuid7: lexicographic order == chronological, so the max id
+		// is the active session. consolidated_until is the highest messages.id
+		// already folded into long-term memory.
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL DEFAULT '',
+			consolidated_until INTEGER NOT NULL DEFAULT 0
+		)`,
+		// ponytail: no index/FK — single user, tiny data; add if it ever grows.
+		`CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			created_at INTEGER NOT NULL
 		)`,
 	} {
 		if _, err := db.Exec(ddl); err != nil {
@@ -113,6 +133,63 @@ func (s *Store) RevokePairing(channel, userID string) (bool, error) {
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// ActiveSession returns the session with the max id (uuid7: the newest);
+// false means no session exists yet.
+func (s *Store) ActiveSession() (Session, bool, error) {
+	var sess Session
+	err := s.db.QueryRow(`SELECT id, name, consolidated_until FROM sessions ORDER BY id DESC LIMIT 1`).
+		Scan(&sess.ID, &sess.Name, &sess.ConsolidatedUntil)
+	if err == sql.ErrNoRows {
+		return Session{}, false, nil
+	}
+	if err != nil {
+		return Session{}, false, err
+	}
+	return sess, true, nil
+}
+
+func (s *Store) AddSession(id string) error {
+	_, err := s.db.Exec(`INSERT INTO sessions (id) VALUES (?)`, id)
+	return err
+}
+
+func (s *Store) SetSessionName(id, name string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET name = ? WHERE id = ?`, name, id)
+	return err
+}
+
+func (s *Store) SetConsolidatedUntil(id string, msgID int64) error {
+	_, err := s.db.Exec(`UPDATE sessions SET consolidated_until = ? WHERE id = ?`, msgID, id)
+	return err
+}
+
+func (s *Store) AddMessage(sessionID, role, content string, createdAt int64) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO messages (session_id, role, content, created_at)
+		VALUES (?, ?, ?, ?) RETURNING id`, sessionID, role, content, createdAt).Scan(&id)
+	return id, err
+}
+
+// Messages returns the whole session, chronological.
+// ponytail: load-all; add a LIMIT if a session ever gets huge.
+func (s *Store) Messages(sessionID string) ([]Message, error) {
+	rows, err := s.db.Query(`SELECT id, role, content, created_at FROM messages
+		WHERE session_id = ? ORDER BY id`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ms []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		ms = append(ms, m)
+	}
+	return ms, rows.Err()
 }
 
 func (s *Store) SetConnected(name string, v bool) error {
