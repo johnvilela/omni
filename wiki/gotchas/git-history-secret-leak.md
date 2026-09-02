@@ -1,0 +1,11 @@
+---
+tags: [gotcha, git, security]
+---
+
+A screenshot review caught that `omni pairing --help`'s EXAMPLES used the user's own real pairing code and real Telegram user id (lifted from an earlier Openclaw screenshot) instead of placeholders. Those values had already been committed — across 5 commits in the `feat(cli): pairing command` line — so a plain `git commit --amend` couldn't reach them (amend only rewrites the tip commit).
+
+Fix used `git filter-branch` to rewrite every affected commit in place (`sed` over the file in a `--tree-filter`, scoped to the commit range containing the leak), replacing the real values with fakes while leaving commit messages/structure untouched — only the SHAs moved. Then: deleted the `refs/original/*` backup refs `filter-branch` leaves behind, expired the reflog (`git reflog expire --expire=now --all`), and ran `git gc --prune=now` so the old blobs are physically deleted, not just unreferenced. Verified clean by `git grep`-ing both leaked strings across `$(git rev-list --all)` — every commit, not just HEAD.
+
+One condition made the rewrite safe without a force-push: `origin/master` sat *before* the leaking commits (the branch was several commits ahead and none of the affected commits had ever been pushed), so the local rewrite fully contained it. Had the leak already been pushed, this same rewrite would need a force-push plus coordinating with anyone who'd already pulled.
+
+Rule of thumb: if a secret/PII value lands in a commit that isn't the current HEAD, `--amend` won't remove it — reach for `git filter-branch` (or `git filter-repo`) over the specific commit range, then purge backup refs + reflog + `gc --prune=now` and confirm with `git grep` across `git rev-list --all`. Also remember the rewrite only reaches git: the same values can persist in chat transcripts, screenshots, or a message log outside git's control (in this case, in Telegram history and in the session transcript itself), which no git operation touches. See [[sessions/fba1c4ce-b5ca-4359-b563-0d2fb3e6de2f]] for the incident.
