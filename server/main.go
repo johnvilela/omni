@@ -38,6 +38,10 @@ func main() {
 	}
 	defer store.Close()
 
+	if err := seedPersona(); err != nil {
+		log.Printf("persona: %v", err) // dormant feature, never fatal
+	}
+
 	apiBase := os.Getenv("OMNI_TELEGRAM_API") // test/debug override
 	if apiBase == "" {
 		apiBase = "https://api.telegram.org"

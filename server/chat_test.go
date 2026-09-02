@@ -17,7 +17,7 @@ import (
 func TestComposePromptDegenerate(t *testing.T) {
 	// no memory + no history must behave byte-for-byte like the old
 	// single-turn bot: the raw text, nothing else.
-	prompt, dropped := composePrompt("", nil, "ping", 8000)
+	prompt, dropped := composePrompt("", "", nil, "ping", 8000)
 	if prompt != "ping" || len(dropped) != 0 {
 		t.Fatalf("composePrompt(bare) = %q, %v; want raw text, no dropped", prompt, dropped)
 	}
@@ -28,7 +28,7 @@ func TestComposePromptSections(t *testing.T) {
 		{ID: 1, Role: "user", Content: "ping"},
 		{ID: 2, Role: "assistant", Content: "pong"},
 	}
-	prompt, dropped := composePrompt("owner likes go", history, "again?", 8000)
+	prompt, dropped := composePrompt("", "owner likes go", history, "again?", 8000)
 	want := "Long-term memory about the user:\nowner likes go\n\n" +
 		"Conversation so far:\nuser: ping\nassistant: pong\n\n" +
 		"New user message (answer this):\nagain?"
@@ -43,7 +43,7 @@ func TestComposePromptSections(t *testing.T) {
 func TestComposePromptBudget(t *testing.T) {
 	old := Message{ID: 1, Role: "user", Content: strings.Repeat("a", 40)}        // 10 tokens
 	newer := Message{ID: 2, Role: "assistant", Content: strings.Repeat("b", 40)} // 10 tokens
-	prompt, dropped := composePrompt("", []Message{old, newer}, "hi", 15)
+	prompt, dropped := composePrompt("", "", []Message{old, newer}, "hi", 15)
 	if strings.Contains(prompt, old.Content) || !strings.Contains(prompt, newer.Content) {
 		t.Fatalf("budget walk kept the wrong turns: %q", prompt)
 	}
@@ -55,7 +55,7 @@ func TestComposePromptBudget(t *testing.T) {
 func TestComposePromptOversizedMessage(t *testing.T) {
 	history := []Message{{ID: 1, Role: "user", Content: "ping"}}
 	text := strings.Repeat("x", 100) // 25 tokens, over the whole budget
-	prompt, dropped := composePrompt("", history, text, 10)
+	prompt, dropped := composePrompt("", "", history, text, 10)
 	if !strings.Contains(prompt, text) {
 		t.Fatal("oversized message must still be sent")
 	}
@@ -67,12 +67,42 @@ func TestComposePromptOversizedMessage(t *testing.T) {
 func TestComposePromptMemoryCountsAgainstBudget(t *testing.T) {
 	memory := strings.Repeat("m", 40) // 10 tokens
 	history := []Message{{ID: 1, Role: "user", Content: strings.Repeat("a", 40)}}
-	prompt, dropped := composePrompt(memory, history, "hi", 12)
+	prompt, dropped := composePrompt("", memory, history, "hi", 12)
 	if !strings.Contains(prompt, memory) {
 		t.Fatal("memory section must always be included whole")
 	}
 	if strings.Contains(prompt, history[0].Content) || len(dropped) != 1 {
 		t.Fatalf("memory must count against the budget: %q, dropped %v", prompt, dropped)
+	}
+}
+
+// TestComposePromptPersona: the persona rides whole atop every prompt and
+// counts against the budget like memory.
+func TestComposePromptPersona(t *testing.T) {
+	history := []Message{{ID: 1, Role: "user", Content: "ping"}}
+	prompt, _ := composePrompt("be brief", "owner likes go", history, "hi", 8000)
+	if !strings.HasPrefix(prompt, "be brief\n\n") {
+		t.Fatalf("persona must lead the prompt: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Long-term memory about the user:\nowner likes go") {
+		t.Fatalf("memory section lost: %q", prompt)
+	}
+
+	// budget: a 10-token persona at budget 12 evicts the 10-token history turn
+	persona := strings.Repeat("p", 40)
+	history = []Message{{ID: 1, Role: "user", Content: strings.Repeat("a", 40)}}
+	prompt, dropped := composePrompt(persona, "", history, "hi", 12)
+	if !strings.Contains(prompt, persona) {
+		t.Fatal("persona must always be included whole")
+	}
+	if strings.Contains(prompt, history[0].Content) || len(dropped) != 1 {
+		t.Fatalf("persona must count against the budget: %q, dropped %v", prompt, dropped)
+	}
+
+	// persona alone (no memory, no history) still frames the message
+	prompt, _ = composePrompt("be brief", "", nil, "hi", 8000)
+	if !strings.HasPrefix(prompt, "be brief") || !strings.Contains(prompt, "New user message (answer this):\nhi") {
+		t.Fatalf("persona-only prompt = %q", prompt)
 	}
 }
 
@@ -140,6 +170,35 @@ func TestChatAnswerCreatesSession(t *testing.T) {
 	// first message of a fresh install is the bare text, exactly like today
 	if prompts := rec.all(); len(prompts) == 0 || prompts[0] != "ping" {
 		t.Fatalf("first prompt = %v; want bare ping", prompts)
+	}
+}
+
+// TestChatAnswerInjectsPersona: the config-folder AGENTS.md leads every
+// composed prompt — chat is stateless, so "every turn" is what makes the
+// model never forget it.
+func TestChatAnswerInjectsPersona(t *testing.T) {
+	srv, _, rec := newChatTestServer(t)
+	dir, _ := os.UserConfigDir()
+	if err := os.MkdirAll(filepath.Join(dir, app), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, app, "AGENTS.md"), []byte("SPEAK-LIKE-A-PIRATE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.ChatAnswer(context.Background(), "ping"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.ChatAnswer(context.Background(), "again"); err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	for _, p := range rec.all() {
+		if strings.HasPrefix(p, "SPEAK-LIKE-A-PIRATE") {
+			seen++
+		}
+	}
+	if seen < 2 {
+		t.Fatalf("persona led %d prompts; want both chat turns (all: %q)", seen, rec.all())
 	}
 }
 

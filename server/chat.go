@@ -44,15 +44,15 @@ func tokenBudget() int {
 func estTokens(s string) int { return len(s) / 4 }
 
 // composePrompt builds the one text prompt sent identically to every provider
-// path: long-term memory + the history that fits the budget + the new
-// message. Memory and the new message are always included whole; history is
-// walked newest→oldest and the turns that don't fit are returned as dropped
-// (chronological) for compaction into long-term memory.
-func composePrompt(memory string, history []Message, text string, budget int) (string, []Message) {
-	if memory == "" && len(history) == 0 {
+// path: persona + long-term memory + the history that fits the budget + the
+// new message. Persona, memory and the new message are always included whole;
+// history is walked newest→oldest and the turns that don't fit are returned
+// as dropped (chronological) for compaction into long-term memory.
+func composePrompt(persona, memory string, history []Message, text string, budget int) (string, []Message) {
+	if persona == "" && memory == "" && len(history) == 0 {
 		return text, nil // fresh install behaves exactly like the old single-turn bot
 	}
-	remaining := budget - estTokens(memory) - estTokens(text)
+	remaining := budget - estTokens(persona) - estTokens(memory) - estTokens(text)
 	keep := len(history) // index of the oldest turn that still fits
 	for keep > 0 && estTokens(history[keep-1].Content) <= remaining {
 		remaining -= estTokens(history[keep-1].Content)
@@ -60,6 +60,9 @@ func composePrompt(memory string, history []Message, text string, budget int) (s
 	}
 
 	var b strings.Builder
+	if persona != "" {
+		b.WriteString(strings.TrimSpace(persona) + "\n\n")
+	}
 	if memory != "" {
 		b.WriteString("Long-term memory about the user:\n" + memory + "\n\n")
 	}
@@ -116,7 +119,7 @@ func (s *Server) ChatAnswer(ctx context.Context, text string) (string, error) {
 	if wiki != "" {
 		memory = readMemory(wiki)
 	}
-	prompt, dropped := composePrompt(memory, history, text, tokenBudget())
+	prompt, dropped := composePrompt(readPersona(), memory, history, text, tokenBudget())
 	reply, err := s.answerWith(ctx, sess.Provider, prompt)
 	if err != nil {
 		return "", err
