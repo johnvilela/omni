@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: require a version bump when Go code changed
+        run: |
+          if ! git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE '(\.go|go\.mod)$'; then
+            echo "no Go changes — version bump not required"
+            exit 0
+          fi
+          extract() { sed -n 's/^const Version = "\(.*\)"$/\1/p' "$1"; }
+          head_version=$(extract version/version.go)
+          base_version=$(git show "origin/${{ github.base_ref }}:version/version.go" | extract /dev/stdin)
+          echo "base=$base_version head=$head_version"
+          if [ "$head_version" = "$base_version" ]; then
+            echo "::error::Go code changed but const Version in version/version.go was not bumped"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$head_version" >/dev/null; then
+            echo "::error::tag $head_version already exists — bump to an unused version"
+            exit 1
+          fi
