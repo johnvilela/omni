@@ -214,11 +214,17 @@ func TestCommandChatAtProvider(t *testing.T) {
 		t.Fatalf("ActiveSession = %+v; want chat session on openai", sess)
 	}
 
-	// with text it answers the rest through the picked provider
+	// with text the rest is queued for the picked provider (silent ack); the
+	// answer lands in the session in the background
 	reply = srv.handleMessage(context.Background(), "@openai ping")
-	if reply.Text != "pong" {
-		t.Fatalf("@openai ping = %q; want pong", reply.Text)
+	if reply.Text != "" {
+		t.Fatalf("@openai ping = %q; want queued silence", reply.Text)
 	}
+	waitFor(t, func() bool {
+		ms, _ := store.Messages(sess.ID)
+		return len(ms) == 2 && ms[1].Content == "pong"
+	})
+	waitFor(t, func() bool { return !srv.running(sess.ID) })
 
 	// unknown provider: error, nothing saved to the session
 	before, _ := store.Messages(sess.ID)

@@ -7,12 +7,10 @@ tags: [tasks, backlog]
 Deliberate deferrals with their trigger conditions — pick one up when its
 trigger fires, not before.
 
-- **Unblock the serial telegram poller.** An agent turn holds `Poll`
-  (server/telegram.go) for up to 15 minutes: no `/sessions`, no `/crons`, no
-  chat replies meanwhile (messages queue in getUpdates, none are lost).
-  Upgrade path already marked by the `ponytail:` comment on `Poll`: answer in
-  a goroutine and deliver through `t.send`. Trigger: `/agent` sees real daily
-  use and the blocking annoys.
+- **Persist the background queue.** Queued-but-unstarted session messages
+  live in memory (`Server.queues`, server/queue.go) and die with the server;
+  user turns persist only at run time. Marked by the `ponytail:` comment on
+  `sessionQueue`. Trigger: a restart eats a queued message and it hurts.
 - **OpenAI via the Codex backend** — direct HTTP instead of `codex exec`
   startup cost; see [[openai-codex-backend]]. Trigger: CLI latency becomes a
   real complaint in chats.

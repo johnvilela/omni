@@ -131,6 +131,9 @@ func (s *Server) agentAnswer(ctx context.Context, sess Session, text string) str
 		return "⚠ " + err.Error()
 	}
 	s.recordUsage(sess.Provider, u)
+	if u.ctx > 0 {
+		s.store.SetSessionCtx(sess.ID, u.ctx) // best-effort, /context only
+	}
 	// claude forks a new session id every resumed turn — a missed write here
 	// orphans the vendor session, so failures surface instead of hiding
 	if vendorID != "" && vendorID != sess.VendorSessionID {
@@ -165,7 +168,8 @@ type claudeResult struct {
 }
 
 func (r claudeResult) usage() callUsage {
-	return callUsage{in: r.Usage.In + r.Usage.CacheWrite + r.Usage.CacheRead, out: r.Usage.Out, cost: r.TotalCost}
+	in := r.Usage.In + r.Usage.CacheWrite + r.Usage.CacheRead
+	return callUsage{in: in, out: r.Usage.Out, ctx: in, cost: r.TotalCost}
 }
 
 // parseClaudeJSON decodes a claude json result, mapping is_error to an error.
@@ -201,6 +205,7 @@ func parseCodexEvents(out string) (threadID string, u callUsage) {
 		case "turn.completed":
 			u.in += ev.Usage.In
 			u.out += ev.Usage.Out
+			u.ctx = ev.Usage.In // last turn's input ≈ current context size
 		}
 	}
 	return threadID, u

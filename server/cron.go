@@ -137,7 +137,8 @@ func (s *Server) fireCron(ctx context.Context, c Cron) {
 	var text string
 	switch c.Kind {
 	case "prompt":
-		prompt, _ := composePrompt(readPersona(), "", nil, c.Text, tokenBudget())
+		budget, _ := chatBudget(s.chatProvider(Session{})) // Answer uses the default llm
+		prompt, _ := composePrompt(readPersona(), "", nil, c.Text, budget)
 		reply, err := s.Answer(ctx, prompt)
 		if err != nil {
 			text = fmt.Sprintf("⚠ cron #%d failed: %v", c.ID, err)
@@ -170,23 +171,32 @@ func (s *Server) fireCron(ctx context.Context, c Cron) {
 	if text == "" {
 		text = "(empty reply)"
 	}
-	s.notifyOwner(ctx, text)
+	s.notifyOwner(ctx, tgReply{Text: text})
 }
 
 // notifyOwner sends a proactive message to every approved telegram pairing.
-func (s *Server) notifyOwner(ctx context.Context, text string) {
+func (s *Server) notifyOwner(ctx context.Context, r tgReply) {
 	s.mu.Lock()
 	tg := s.tg
 	s.mu.Unlock()
 	if tg == nil {
-		log.Printf("cron: telegram not connected, dropping: %.60s", text)
+		log.Printf("notify: telegram not connected, dropping: %.60s", r.Text)
 		return
 	}
+	for _, id := range s.ownerChats() {
+		tg.send(ctx, id, r)
+	}
+}
+
+// ownerChats lists the chat ids of every approved telegram pairing (private
+// chats: chat id == user id).
+func (s *Server) ownerChats() []int64 {
 	ps, err := s.store.Pairings("telegram")
 	if err != nil {
-		log.Printf("cron: %v", err)
-		return
+		log.Printf("notify: %v", err)
+		return nil
 	}
+	var ids []int64
 	for _, p := range ps {
 		if !p.Approved {
 			continue
@@ -195,6 +205,7 @@ func (s *Server) notifyOwner(ctx context.Context, text string) {
 		if err != nil {
 			continue
 		}
-		tg.send(ctx, id, tgReply{Text: text})
+		ids = append(ids, id)
 	}
+	return ids
 }

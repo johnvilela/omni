@@ -304,7 +304,11 @@ func TestAnswerWithProvider(t *testing.T) {
 
 func TestAnswerNotice(t *testing.T) {
 	srv, _ := newLLMTestServer(t)
-	got := srv.answerNotice(context.Background(), "hi")
+	sess, err := srv.ensureSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := srv.answerNotice(context.Background(), sess, "hi")
 	if !strings.HasPrefix(got, "⚠ ") || !strings.Contains(got, "llm connect") {
 		t.Fatalf("answerNotice = %q; want ⚠ notice with hint", got)
 	}

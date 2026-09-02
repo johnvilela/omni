@@ -22,8 +22,9 @@ type LLM struct {
 	Connected bool   `json:"connected"`
 	Source    string `json:"source"`
 	Default   bool   `json:"default"`
-	Model     string `json:"model"`
-	Effort    string `json:"effort"`
+	Model      string `json:"model"`
+	Effort     string `json:"effort"`
+	BudgetNote string `json:"budget_note"`
 }
 
 // ErrTokenRequired means the server has no bot token; prompt the user.

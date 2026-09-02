@@ -13,7 +13,11 @@ import (
 // handleMessage dispatches one approved chat message: slash commands first,
 // everything else to the active session's answer path.
 func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
-	cmd, arg, _ := strings.Cut(strings.TrimSpace(text), " ")
+	text = strings.TrimSpace(text)
+	if rest, ok := strings.CutPrefix(text, "!"); ok {
+		return s.preempt(strings.TrimSpace(rest))
+	}
+	cmd, arg, _ := strings.Cut(text, " ")
 	switch cmd {
 	case "/new":
 		if _, err := s.newSession(false, ""); err != nil {
@@ -42,18 +46,21 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		if arg == "" {
 			return tgReply{Text: note + "agent session started (" + provider + ") — send it a task"}
 		}
-		return tgReply{Text: note + s.agentAnswer(ctx, sess, arg)}
+		s.enqueue(sess.ID, arg)
+		return tgReply{Text: note + "agent session started (" + provider + ") — ⏳ running"}
 	case "/sessions":
 		return s.listSessions()
 	case "/usage":
 		return s.listUsage(ctx)
+	case "/context":
+		return s.showContext()
 	case "/crons":
 		return s.listCrons()
 	}
 	if pick, rest, ok := cutAtProvider(text); ok {
-		return s.atProvider(ctx, pick, rest)
+		return s.atProvider(pick, rest)
 	}
-	return s.sessionAnswer(ctx, text)
+	return s.sessionAnswer(text)
 }
 
 // cutAtProvider splits a leading "@name" token off text.
@@ -76,7 +83,7 @@ func parseProvider(name string) (string, error) {
 // atProvider handles a sticky chat @pick: the active session is pinned to
 // that provider until /new or another pick. Validation comes before any
 // state change or saved message.
-func (s *Server) atProvider(ctx context.Context, name, rest string) tgReply {
+func (s *Server) atProvider(name, rest string) tgReply {
 	provider, err := parseProvider(name)
 	if err != nil {
 		return tgReply{Text: "⚠ " + err.Error()}
@@ -94,7 +101,7 @@ func (s *Server) atProvider(ctx context.Context, name, rest string) tgReply {
 	if rest == "" {
 		return tgReply{Text: "session now uses " + provider}
 	}
-	return s.sessionAnswer(ctx, rest)
+	return s.sessionAnswer(rest)
 }
 
 // newSession creates a session and points the active pointer at it.
@@ -147,6 +154,12 @@ func (s *Server) listSessions() tgReply {
 		if r.Agent {
 			label = "🤖 " + label
 		}
+		if r.Unread != "" {
+			label = "✉ " + label
+		}
+		if s.running(r.ID) {
+			label = "⏳ " + label
+		}
 		kb = append(kb, []button{{Text: label, CallbackData: r.ID}})
 	}
 	return tgReply{Text: "sessions — tap to resume:", Keyboard: kb}
@@ -190,7 +203,8 @@ func (s *Server) deleteCronCallback(data string) tgReply {
 	return tgReply{Text: fmt.Sprintf("🗑 removed #%d", id)}
 }
 
-// resumeSession points the active pointer at an existing session.
+// resumeSession points the active pointer at an existing session and delivers
+// any answer that finished while it wasn't active.
 func (s *Server) resumeSession(id string) tgReply {
 	sess, ok, err := s.store.Session(id)
 	if err != nil {
@@ -202,29 +216,22 @@ func (s *Server) resumeSession(id string) tgReply {
 	if err := s.store.SetActiveSession(id); err != nil {
 		return tgReply{Text: "⚠ " + err.Error()}
 	}
-	name := sess.Name
-	if name == "" {
-		name = sess.ID
-		if len(name) > 8 {
-			name = name[:8]
-		}
+	reply := "resumed: " + sessionLabel(sess)
+	if u := strings.TrimSpace(sess.Unread); u != "" {
+		s.store.ClearSessionUnread(sess.ID) // best-effort
+		reply += "\n\n" + u
 	}
-	if sess.Agent {
-		name = "🤖 " + name
-	}
-	return tgReply{Text: "resumed: " + name}
+	return tgReply{Text: reply}
 }
 
-// sessionAnswer routes a plain message to the active session: agent sessions
-// continue their vendor CLI conversation, chat sessions take the
-// composed-history path.
-func (s *Server) sessionAnswer(ctx context.Context, text string) tgReply {
+// sessionAnswer routes a plain message to the active session's background
+// queue; the answer arrives later as a push (or as unread if the user has
+// switched sessions by then). Empty reply = the poller sends nothing now.
+func (s *Server) sessionAnswer(text string) tgReply {
 	sess, err := s.ensureSession()
 	if err != nil {
 		return tgReply{Text: "⚠ " + err.Error()}
 	}
-	if sess.Agent {
-		return tgReply{Text: s.agentAnswer(ctx, sess, text)}
-	}
-	return tgReply{Text: s.answerNotice(ctx, text)}
+	s.enqueue(sess.ID, text)
+	return tgReply{}
 }

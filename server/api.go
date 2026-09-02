@@ -30,6 +30,9 @@ type Server struct {
 	pairHits map[int64]*pairHit
 
 	digesting atomic.Bool // one long-term memory digest in flight at a time
+
+	qmu    sync.Mutex
+	queues map[string]*sessionQueue // sessionID → background work; key present = drainer alive
 }
 
 func NewServer(store *Store, telegramAPIBase string) *Server {

@@ -22,6 +22,9 @@ type llmStatus struct {
 	Default   bool   `json:"default,omitempty"`
 	Model     string `json:"model,omitempty"`  // user-picked via `omni llm model`
 	Effort    string `json:"effort,omitempty"` // low | medium | high
+	// BudgetNote warns that the configured token_budget exceeds this
+	// provider's chat-model window and got clamped.
+	BudgetNote string `json:"budget_note,omitempty"`
 }
 
 var llmProviders = []string{"openai", "claude", "gemini"}
@@ -250,6 +253,10 @@ func (s *Server) llmStatuses() []llmStatus {
 		if sts[i].Connected {
 			onCount++
 			onIdx = i
+			if budget, clamped := chatBudget(p); clamped {
+				sts[i].BudgetNote = fmt.Sprintf("token_budget %s exceeds %s's window — chat clamped to %s",
+					fmtTok(int64(cfg.TokenBudget)), chatModel(p), fmtTok(int64(budget)))
+			}
 		}
 	}
 	if def == "" && onCount == 1 {

@@ -69,9 +69,10 @@ func TestAgentAnswerClaude(t *testing.T) {
 	store.AddSession("s1", true, "claude")
 	store.SetActiveSession("s1")
 
-	reply := srv.handleMessage(context.Background(), "do the thing")
-	if reply.Text != "pong" {
-		t.Fatalf("agent reply = %q; want pong", reply.Text)
+	sess, _, _ := store.Session("s1")
+	reply := srv.agentAnswer(context.Background(), sess, "do the thing")
+	if reply != "pong" {
+		t.Fatalf("agent reply = %q; want pong", reply)
 	}
 	want := []string{"-p", "do the thing", "--output-format", "json", "--dangerously-skip-permissions"}
 	if got := readLines(t, argsFile); !slices.Equal(got, want) {
@@ -87,8 +88,10 @@ func TestAgentAnswerClaude(t *testing.T) {
 		t.Fatalf("messages = %+v; want the exchange", ms)
 	}
 
-	// second turn resumes and refreshes the id (claude forks per turn)
-	srv.handleMessage(context.Background(), "again")
+	// second turn resumes and refreshes the id (claude forks per turn);
+	// re-read the row like the queue worker does — fresh vendor id
+	sess, _, _ = store.Session("s1")
+	srv.agentAnswer(context.Background(), sess, "again")
 	got := readLines(t, argsFile)
 	if i := slices.Index(got, "--resume"); i < 0 || got[i+1] != "vend-1" {
 		t.Fatalf("resume args = %q; want --resume vend-1", got)
@@ -105,9 +108,10 @@ func TestAgentAnswerCodex(t *testing.T) {
 	store.AddSession("s1", true, "openai")
 	store.SetActiveSession("s1")
 
-	reply := srv.handleMessage(context.Background(), "do the thing")
-	if reply.Text != "pong" {
-		t.Fatalf("agent reply = %q; want pong", reply.Text)
+	sess, _, _ := store.Session("s1")
+	reply := srv.agentAnswer(context.Background(), sess, "do the thing")
+	if reply != "pong" {
+		t.Fatalf("agent reply = %q; want pong", reply)
 	}
 	got := readLines(t, argsFile)
 	// the -o value is a temp file; drop the pair before comparing
@@ -125,7 +129,8 @@ func TestAgentAnswerCodex(t *testing.T) {
 	}
 
 	// resume goes through the exec resume subcommand
-	srv.handleMessage(context.Background(), "again")
+	sess, _, _ = store.Session("s1")
+	srv.agentAnswer(context.Background(), sess, "again")
 	got = readLines(t, argsFile)
 	if got[0] != "exec" || got[1] != "resume" || got[2] != "vend-1" {
 		t.Fatalf("codex resume args = %q; want exec resume vend-1 …", got)
@@ -149,8 +154,9 @@ func TestAgentAnswerClaudeError(t *testing.T) {
 	store.AddSession("s1", true, "claude")
 	store.SetActiveSession("s1")
 
-	reply := srv.handleMessage(context.Background(), "task")
-	if !strings.HasPrefix(reply.Text, "⚠ ") || !strings.Contains(reply.Text, "boom") {
-		t.Fatalf("error reply = %q; want ⚠ notice with the error text", reply.Text)
+	sess, _, _ := store.Session("s1")
+	reply := srv.agentAnswer(context.Background(), sess, "task")
+	if !strings.HasPrefix(reply, "⚠ ") || !strings.Contains(reply, "boom") {
+		t.Fatalf("error reply = %q; want ⚠ notice with the error text", reply)
 	}
 }

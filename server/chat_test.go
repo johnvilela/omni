@@ -113,6 +113,7 @@ type promptRecorder struct {
 	mu      sync.Mutex
 	prompts []string
 	reply   string
+	gate    chan struct{} // when set, each reply waits for one receive (or a close)
 }
 
 func (r *promptRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -127,7 +128,11 @@ func (r *promptRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.prompts = append(r.prompts, body.Messages[0].Content)
 	}
 	reply := r.reply
+	gate := r.gate
 	r.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, reply)
 }
 
@@ -279,24 +284,43 @@ func TestChatAnswerNaming(t *testing.T) {
 func TestAnswerNoticeEmptyReply(t *testing.T) {
 	srv, _, rec := newChatTestServer(t)
 	rec.reply = ""
-	if got := srv.answerNotice(context.Background(), "hi"); got != "(empty reply)" {
+	sess, err := srv.ensureSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.answerNotice(context.Background(), sess, "hi"); got != "(empty reply)" {
 		t.Fatalf("answerNotice(empty) = %q; want (empty reply)", got)
 	}
 }
 
-func TestTokenBudget(t *testing.T) {
+func TestChatBudget(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if got := tokenBudget(); got != 8000 {
-		t.Fatalf("tokenBudget(no config) = %d; want 8000", got)
-	}
 	dir, _ := os.UserConfigDir()
 	if err := os.MkdirAll(filepath.Join(dir, app), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"), []byte("token_budget: 123\n"), 0o600); err != nil {
-		t.Fatal(err)
+	write := func(cfg string) {
+		if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"), []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := tokenBudget(); got != 123 {
-		t.Fatalf("tokenBudget(config) = %d; want 123", got)
+	// no config: the 500k default clamps silently to 80% of haiku's 200k
+	if got, clamped := chatBudget("claude"); got != 160_000 || clamped {
+		t.Fatalf("chatBudget(no config) = %d, %v; want 160000 silent", got, clamped)
+	}
+	// explicit budget over the model window: clamped with a warning
+	write("token_budget: 500000\n")
+	if got, clamped := chatBudget("claude"); got != 160_000 || !clamped {
+		t.Fatalf("chatBudget(500k on haiku) = %d, %v; want 160000 clamped", got, clamped)
+	}
+	// 1M-window model: 500k fits, no warning
+	write("token_budget: 500000\nclaude_model: claude-fable-5\n")
+	if got, clamped := chatBudget("claude"); got != 500_000 || clamped {
+		t.Fatalf("chatBudget(500k on fable) = %d, %v; want 500000 silent", got, clamped)
+	}
+	// small explicit budget passes through untouched
+	write("token_budget: 123\n")
+	if got, clamped := chatBudget("claude"); got != 123 || clamped {
+		t.Fatalf("chatBudget(123) = %d, %v; want 123", got, clamped)
 	}
 }

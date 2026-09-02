@@ -99,9 +99,17 @@ func TestPairingGate(t *testing.T) {
 	if strings.Contains(third, "access not configured") || strings.Contains(third, "awaiting approval") {
 		t.Errorf("approved user still gated:\n%s", third)
 	}
-	if !strings.Contains(third, "llm") { // test env has no llm → the answer flow's own notice
-		t.Errorf("approved user did not reach the answer flow:\n%s", third)
+	// the answer now runs in the background: the gate pass is a silent enqueue,
+	// and the answer flow persists the user turn before calling the llm
+	sess, ok, _ := store.ActiveSession()
+	if !ok {
+		t.Fatal("approved message created no session")
 	}
+	waitFor(t, func() bool {
+		ms, _ := store.Messages(sess.ID)
+		return len(ms) == 1 && ms[0].Content == "now?"
+	})
+	waitFor(t, func() bool { return !srv.running(sess.ID) })
 }
 
 func TestPairingEndpoints(t *testing.T) {

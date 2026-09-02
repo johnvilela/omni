@@ -17,6 +17,8 @@ type Session struct {
 	Agent             bool   // vendor CLI runs un-bare with full tool access
 	Provider          string // agent sessions only: "claude" | "openai"
 	VendorSessionID   string // agent sessions only: the CLI's session to --resume
+	LastCtx           int64  // agent sessions only: context tokens reported on the last turn
+	Unread            string // answers finished while another session was active; delivered on resume
 }
 
 // Message is one turn of a session.
@@ -27,15 +29,66 @@ type Message struct {
 	CreatedAt int64 // unix seconds
 }
 
-const defaultTokenBudget = 8000
+// defaultTokenBudget is a cost cap, not a context-window fit: the whole
+// composed prompt is re-sent uncached every turn, so a full budget costs
+// budget × price-per-token on every message. Models with smaller windows are
+// clamped by chatBudget; go lower via token_budget if api spend or oauth
+// quota burn matters.
+const defaultTokenBudget = 500_000
 
-// tokenBudget is the config token_budget; 0/absent means the default
-// (readConfig returns a zero Config on any error, so the fallback lives here).
-func tokenBudget() int {
-	if b := readConfig().TokenBudget; b > 0 {
-		return b
+// modelWindows maps known chat models to their context window, matched by
+// longest prefix so dated suffixes keep working.
+var modelWindows = map[string]int64{
+	"claude-fable":    1_000_000,
+	"claude-opus-5":   1_000_000,
+	"claude-sonnet-5": 1_000_000,
+	"claude":          200_000,
+	"gpt-5":           272_000,
+	"gpt-4.1":         1_000_000,
+	"gpt-4o":          128_000,
+	"gemini":          1_000_000,
+}
+
+// modelWindow is the model's context window; unknown models get the smallest
+// known window — a conservative clamp is safe, an optimistic one 400-errors
+// mid-conversation.
+func modelWindow(model string) int64 {
+	best, w := 0, int64(128_000)
+	for p, win := range modelWindows {
+		if strings.HasPrefix(model, p) && len(p) > best {
+			best, w = len(p), win
+		}
 	}
-	return defaultTokenBudget
+	return w
+}
+
+// chatModel is the model a chat call on provider would use: the configured
+// pick, else the hardcoded cheap default. The oauth CLI path actually uses
+// the CLI's own default — unknowable from here, so the clamp stays
+// conservative until a model is configured explicitly.
+func chatModel(provider string) string {
+	if m := configuredModel(provider); m != "" {
+		return m
+	}
+	return llmModels[provider]
+}
+
+// chatBudget is the effective compose budget for one provider's chat model:
+// token_budget (default 500k) clamped to 80% of the model window, leaving
+// headroom for the reply and estTokens error. clamped is true only when an
+// explicit config value got cut — surfaced as a warning in status and
+// /context; the silent default just fits whatever model is selected.
+func chatBudget(provider string) (budget int, clamped bool) {
+	limit := int(modelWindow(chatModel(provider)) * 4 / 5)
+	b := readConfig().TokenBudget
+	explicit := b > 0
+	if b == 0 {
+		b = defaultTokenBudget
+	}
+	if b > limit {
+		return limit, explicit
+	}
+	return b, false
 }
 
 // estTokens estimates tokens as bytes/4 — overcounts non-ASCII, which errs on
@@ -80,6 +133,21 @@ func composePrompt(persona, memory string, history []Message, text string, budge
 	return b.String(), history[:keep]
 }
 
+// chatProvider resolves which provider a session's chat call hits: its
+// sticky pin, else the default llm ("claude" when nothing is connected —
+// the call fails before the budget matters then).
+func (s *Server) chatProvider(sess Session) string {
+	if sess.Provider != "" {
+		return sess.Provider
+	}
+	for _, ls := range s.llmStatuses() {
+		if ls.Default {
+			return ls.Name
+		}
+	}
+	return "claude"
+}
+
 // ensureSession returns the active session, creating one when none exists.
 // Sole session-creation point — becomes a hook event when omni grows hooks.
 func (s *Server) ensureSession() (Session, error) {
@@ -105,6 +173,13 @@ func (s *Server) ChatAnswer(ctx context.Context, text string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return s.chatAnswer(ctx, sess, text)
+}
+
+// chatAnswer is the session-scoped core: background workers pass the session
+// they were enqueued for, so a queued message never lands in whatever session
+// became active meanwhile.
+func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (string, error) {
 	history, err := s.store.Messages(sess.ID)
 	if err != nil {
 		return "", err
@@ -120,7 +195,8 @@ func (s *Server) ChatAnswer(ctx context.Context, text string) (string, error) {
 		memory = readMemory(wiki)
 	}
 	persona := readPersona() + "\n\n" + cronPrompt(s.store)
-	prompt, dropped := composePrompt(persona, memory, history, text, tokenBudget())
+	budget, _ := chatBudget(s.chatProvider(sess))
+	prompt, dropped := composePrompt(persona, memory, history, text, budget)
 	reply, err := s.answerWith(ctx, sess.Provider, prompt)
 	if err != nil {
 		return "", err

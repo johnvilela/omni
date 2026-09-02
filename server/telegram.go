@@ -117,6 +117,7 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 		{"command": "agent", "description": "agent session with tools — /agent [@openai|@claude] task"},
 		{"command": "sessions", "description": "list recent sessions — tap to resume"},
 		{"command": "usage", "description": "llm usage per provider — tokens, cost, limits"},
+		{"command": "context", "description": "context usage of the active session — tokens per source"},
 		{"command": "crons", "description": "list scheduled jobs — tap to delete"},
 	}}, nil)
 }
@@ -139,10 +140,9 @@ func (t *Telegram) typing(ctx context.Context, chatID int64) (stop func()) {
 }
 
 // Poll long-polls getUpdates and replies to each text message via t.answer.
-// Returns when ctx is cancelled.
-// ponytail: answers serially in the poll loop — an agent turn can hold it for
-// up to 15 min (messages queue in getUpdates, none lost); answer in a
-// goroutine through t.send if that ever hurts.
+// Returns when ctx is cancelled. t.answer stays synchronous but fast: llm
+// work is dispatched to background workers one layer up (server/queue.go),
+// so the loop never blocks on an answer.
 func (t *Telegram) Poll(ctx context.Context) {
 	var offset int64
 	for ctx.Err() == nil {

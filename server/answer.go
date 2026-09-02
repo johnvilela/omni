@@ -75,10 +75,11 @@ func (s *Server) answerWith(ctx context.Context, provider, text string) (string,
 }
 
 // callUsage is what one llm call consumed; cost only when the provider
-// reported one.
+// reported one. ctx is the context size of the last request in the call —
+// what /context shows — set only by the vendor CLI paths.
 type callUsage struct {
-	in, out int64
-	cost    float64
+	in, out, ctx int64
+	cost         float64
 }
 
 // recordUsage best-effort logs one call's consumption for /usage.
@@ -131,10 +132,10 @@ func runChatCLI(ctx context.Context, provider, text string) (string, callUsage, 
 	return out, callUsage{}, err
 }
 
-// answerNotice is the telegram poller's entry point: history-aware, errors
+// answerNotice is the chat worker's entry point: history-aware, errors
 // become a visible notice instead of silence.
-func (s *Server) answerNotice(ctx context.Context, text string) string {
-	reply, err := s.ChatAnswer(ctx, text)
+func (s *Server) answerNotice(ctx context.Context, sess Session, text string) string {
+	reply, err := s.chatAnswer(ctx, sess, text)
 	if err != nil {
 		return "⚠ " + err.Error()
 	}
