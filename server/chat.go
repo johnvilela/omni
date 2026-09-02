@@ -195,14 +195,14 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 	if wiki != "" {
 		memory = readMemory(wiki)
 	}
-	persona := readPersona() + "\n\n" + cronPrompt(s.store)
+	persona := readPersona() + "\n\n" + cronPrompt(s.store) + "\n\n" + filePrompt()
 	budget, _ := chatBudget(s.chatProvider(sess))
 	prompt, dropped := composePrompt(persona, memory, history, text, budget)
 	reply, err := s.answerWith(ctx, sess.Provider, prompt)
 	if err != nil {
 		return "", err
 	}
-	reply = s.applyTools(reply) // history keeps confirmations, not TOOL lines
+	reply = s.applyTools(ctx, reply) // history keeps confirmations, not TOOL lines
 	if _, err := s.store.AddMessage(sess.ID, "assistant", reply, time.Now().Unix()); err != nil {
 		return "", err
 	}

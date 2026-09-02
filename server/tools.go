@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -38,8 +39,9 @@ a message implies a recurring need, offer to create one first.`)
 // applyTools executes TOOL: lines in an llm chat reply, replacing each with
 // a deterministic confirmation; everything else passes through. Single-pass:
 // the model sees the confirmations in history on the next turn, not the
-// results in this one.
-func (s *Server) applyTools(reply string) string {
+// results in this one (ponytail: read_file answers land a turn late — add a
+// second llm round if that ever grates).
+func (s *Server) applyTools(ctx context.Context, reply string) string {
 	if !strings.Contains(reply, "TOOL:") {
 		return reply
 	}
@@ -49,12 +51,16 @@ func (s *Server) applyTools(reply string) string {
 		if !ok || !strings.HasPrefix(name, "TOOL:") {
 			continue
 		}
-		lines[i] = s.runTool(strings.TrimPrefix(name, "TOOL:"), args)
+		lines[i] = s.runTool(ctx, strings.TrimPrefix(name, "TOOL:"), args)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-func (s *Server) runTool(name, args string) string {
+func (s *Server) runTool(ctx context.Context, name, args string) string {
+	switch name {
+	case "write_file", "read_file", "edit_file", "delete_file", "send_file", "analyze_file":
+		return s.fileTool(ctx, name, args)
+	}
 	var c struct {
 		ID                   int64
 		Schedule, Kind, Text string

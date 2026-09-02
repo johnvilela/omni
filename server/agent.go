@@ -79,10 +79,24 @@ NEVER delete chrome-profile/):
 Never post, comment, message, or send connection requests directly. Draft the
 content, reply with the draft, and act only after the owner explicitly
 approves in a later message. Reading, searching and browsing are fine.
+` + "\n" + sendFileContract
+
+// sendFileContract teaches the agent the file exchange over telegram; also
+// appended to pre-existing workspaces by ensureAgentDir.
+const sendFileContract = `## Files over Telegram
+
+Files the owner sends arrive in the task text as "[file: /abs/path]" markers
+— read them from disk. To deliver a file (photo, PDF, any document) back to
+the owner's phone, put this line alone on its own line in your final message:
+
+TOOL:send_file {"path":"/absolute/path/to/file"}
+
+omni uploads the file and replaces the line with a confirmation. Absolute
+paths only; images arrive as photos, everything else as documents.
 `
 
 // ensureAgentDir creates the workspace and seeds the instruction files; an
-// existing file is never touched.
+// existing file is never overwritten — new contract sections are appended.
 func ensureAgentDir() error {
 	dir := agentDir()
 	if dir == "" {
@@ -97,6 +111,18 @@ func ensureAgentDir() error {
 			continue
 		}
 		if err := os.WriteFile(path, []byte(agentSeed), 0o644); err != nil {
+			return err
+		}
+	}
+	// migrate older workspaces: append the send_file contract once; owner
+	// edits are preserved, nothing is overwritten
+	for _, f := range []string{"CLAUDE.md", "AGENTS.md"} {
+		path := filepath.Join(dir, f)
+		raw, err := os.ReadFile(path)
+		if err != nil || strings.Contains(string(raw), "send_file") {
+			continue
+		}
+		if err := os.WriteFile(path, append(raw, []byte("\n"+sendFileContract)...), 0o644); err != nil {
 			return err
 		}
 	}
@@ -141,6 +167,8 @@ func (s *Server) agentAnswer(ctx context.Context, sess Session, text string) str
 			return "⚠ " + err.Error()
 		}
 	}
+	// uploads happen now; history keeps 📎 confirmations, never TOOL lines
+	reply = s.applySendFile(ctx, reply)
 	if _, err := s.store.AddMessage(sess.ID, "assistant", reply, time.Now().Unix()); err != nil {
 		return "⚠ " + err.Error()
 	}

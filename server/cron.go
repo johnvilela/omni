@@ -164,7 +164,8 @@ func (s *Server) fireCron(ctx context.Context, c Cron) {
 			break
 		}
 		s.recordUsage(provider, u)
-		text = strings.TrimSpace(reply)
+		// same trust domain as agent sessions: scheduled runs can attach files
+		text = s.applySendFile(ctx, strings.TrimSpace(reply))
 	default: // "message"
 		text = "⏰ " + c.Text
 	}

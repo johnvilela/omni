@@ -138,13 +138,13 @@ func TestCommandAgentStart(t *testing.T) {
 		t.Fatalf("chrome-profile dir: %v", err)
 	}
 
-	// user edits are never clobbered
+	// user edits are never clobbered; missing contract sections are appended
 	custom := []byte("my own instructions")
 	os.WriteFile(filepath.Join(agentDir(), "CLAUDE.md"), custom, 0o644)
 	srv.handleMessage(context.Background(), "/agent")
 	got, _ := os.ReadFile(filepath.Join(agentDir(), "CLAUDE.md"))
-	if string(got) != string(custom) {
-		t.Fatal("/agent overwrote an edited CLAUDE.md")
+	if !strings.HasPrefix(string(got), string(custom)) || !strings.Contains(string(got), "TOOL:send_file") {
+		t.Fatal("/agent must keep owner edits and append the send_file contract")
 	}
 
 	// openai default → codex-powered agent

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -176,6 +179,131 @@ func TestTelegramSendReturningID(t *testing.T) {
 	id, err := tg.sendReturningID(context.Background(), 42, "hi")
 	if err != nil || id != 123 {
 		t.Fatalf("sendReturningID = %d, %v; want 123, nil", id, err)
+	}
+}
+
+// TestTelegramPollPhoto: a photo message reaches the file hook with the
+// largest PhotoSize's file_id and the caption — never the text answer hook.
+func TestTelegramPollPhoto(t *testing.T) {
+	srv := fakeTelegram(t, nil, nil, nil,
+		`{"update_id":7,"message":{"chat":{"id":42},"from":{"id":99},"caption":"look","photo":[{"file_id":"small"},{"file_id":"big"}]}}`)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tg := NewTelegram(srv.URL, "TOKEN")
+	tg.answer = func(context.Context, int64, string) tgReply {
+		t.Error("photo message reached the text answer hook")
+		return tgReply{}
+	}
+	got := make(chan tgFile, 1)
+	tg.file = func(_ context.Context, from int64, f tgFile) tgReply {
+		if from != 99 {
+			t.Errorf("file from = %d, want 99", from)
+		}
+		got <- f
+		return tgReply{}
+	}
+	go tg.Poll(ctx)
+
+	select {
+	case f := <-got:
+		if f != (tgFile{ID: "big", Caption: "look"}) {
+			t.Fatalf("file = %+v; want ID big, caption look", f)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no file hook call within 3s")
+	}
+}
+
+// TestTelegramPollDocument: a document message carries file_id and file_name.
+func TestTelegramPollDocument(t *testing.T) {
+	srv := fakeTelegram(t, nil, nil, nil,
+		`{"update_id":7,"message":{"chat":{"id":42},"from":{"id":99},"document":{"file_id":"doc1","file_name":"report.pdf"}}}`)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tg := NewTelegram(srv.URL, "TOKEN")
+	got := make(chan tgFile, 1)
+	tg.file = func(_ context.Context, _ int64, f tgFile) tgReply {
+		got <- f
+		return tgReply{}
+	}
+	go tg.Poll(ctx)
+
+	select {
+	case f := <-got:
+		if f != (tgFile{ID: "doc1", Name: "report.pdf"}) {
+			t.Fatalf("file = %+v; want doc1 report.pdf", f)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no file hook call within 3s")
+	}
+}
+
+// TestTelegramDownloadFile locks the two-step download: getFile resolves the
+// file_id, then the bytes come from the /file/bot<token>/ URL shape.
+func TestTelegramDownloadFile(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/botTOKEN/getFile", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["file_id"] != "f1" {
+			t.Errorf("getFile file_id = %v, want f1", body["file_id"])
+		}
+		fmt.Fprint(w, `{"ok":true,"result":{"file_path":"documents/x.pdf"}}`)
+	})
+	mux.HandleFunc("/file/botTOKEN/documents/x.pdf", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "PDFBYTES")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tg := NewTelegram(srv.URL, "TOKEN")
+	dest := filepath.Join(t.TempDir(), "x.pdf")
+	if err := tg.downloadFile(context.Background(), "f1", dest); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(dest)
+	if err != nil || string(raw) != "PDFBYTES" {
+		t.Fatalf("downloaded = %q, %v; want PDFBYTES", raw, err)
+	}
+}
+
+// TestTelegramUpload locks the multipart shape: chat_id field plus the file
+// under the given form field with its basename.
+func TestTelegramUpload(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/botTOKEN/sendDocument", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("multipart parse: %v", err)
+		}
+		if got := r.FormValue("chat_id"); got != "42" {
+			t.Errorf("chat_id = %q, want 42", got)
+		}
+		f, hdr, err := r.FormFile("document")
+		if err != nil {
+			t.Errorf("document form file: %v", err)
+		} else {
+			raw, _ := io.ReadAll(f)
+			f.Close()
+			if hdr.Filename != "x.pdf" || string(raw) != "hello" {
+				t.Errorf("file = %q %q, want x.pdf hello", hdr.Filename, raw)
+			}
+		}
+		fmt.Fprint(w, `{"ok":true,"result":{"message_id":1}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "x.pdf")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tg := NewTelegram(srv.URL, "TOKEN")
+	if err := tg.upload(context.Background(), "sendDocument", "document", 42, path); err != nil {
+		t.Fatal(err)
 	}
 }
 

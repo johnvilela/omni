@@ -59,6 +59,7 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 	tg := NewTelegram(s.apiBase, token)
 	tg.answer = s.gatedAnswer
 	tg.callback = s.gatedCallback
+	tg.file = s.gatedFile
 	username, err := tg.GetMe(ctx)
 	if err != nil {
 		return channelStatus{}, http.StatusUnauthorized, err

@@ -5,8 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 	"unicode/utf8"
 )
@@ -22,17 +27,30 @@ type tgReply struct {
 	Keyboard [][]button
 }
 
+// tgFile is one inbound photo/document's metadata — no bytes; the download
+// happens after the pairing gate, one layer up.
+type tgFile struct {
+	ID      string // telegram file_id
+	Name    string // document file_name; empty for photos
+	Caption string
+}
+
 // Telegram talks to the Telegram Bot API for one bot token.
 type Telegram struct {
 	base     string
+	apiBase  string // kept for downloads: apiBase + "/file/bot" + token
+	token    string
 	client   *http.Client
 	answer   func(ctx context.Context, fromID int64, text string) tgReply // reply to one text message
 	callback func(ctx context.Context, fromID int64, data string) tgReply // reply to one button tap
+	file     func(ctx context.Context, fromID int64, f tgFile) tgReply    // reply to one photo/document message
 }
 
 func NewTelegram(apiBase, token string) *Telegram {
 	return &Telegram{
-		base: apiBase + "/bot" + token,
+		base:    apiBase + "/bot" + token,
+		apiBase: apiBase,
+		token:   token,
 		// 50s long poll + slack; individual calls carry ctx too
 		client: &http.Client{Timeout: 60 * time.Second},
 	}
@@ -47,7 +65,15 @@ type update struct {
 		From struct {
 			ID int64 `json:"id"`
 		} `json:"from"`
-		Text string `json:"text"`
+		Text    string `json:"text"`
+		Caption string `json:"caption"`
+		Photo   []struct {
+			FileID string `json:"file_id"`
+		} `json:"photo"`
+		Document *struct {
+			FileID   string `json:"file_id"`
+			FileName string `json:"file_name"`
+		} `json:"document"`
 	} `json:"message"`
 	CallbackQuery *struct {
 		ID   string `json:"id"`
@@ -149,6 +175,81 @@ func (t *Telegram) deleteMessage(ctx context.Context, chatID, msgID int64) error
 	return t.call(ctx, "deleteMessage", map[string]any{"chat_id": chatID, "message_id": msgID}, nil)
 }
 
+// downloadFile resolves a file_id via getFile and streams the bytes to dest.
+// Telegram caps getFile at 20MB — bigger files just surface its error.
+func (t *Telegram) downloadFile(ctx context.Context, fileID, dest string) error {
+	var f struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := t.call(ctx, "getFile", map[string]any{"file_id": fileID}, &f); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.apiBase+"/file/bot"+t.token+"/"+f.FilePath, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram file download: %s", resp.Status)
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		out.Close()
+		os.Remove(dest) // no partial files in the inbox
+		return err
+	}
+	return out.Close()
+}
+
+// upload sends one local file via multipart; method/field are
+// sendPhoto/photo or sendDocument/document.
+func (t *Telegram) upload(ctx context.Context, method, field string, chatID int64, path string) error {
+	in, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	// ponytail: whole file buffered (telegram caps uploads at 50MB); io.Pipe if it hurts
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("chat_id", strconv.FormatInt(chatID, 10))
+	part, err := w.CreateFormFile(field, filepath.Base(path))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, in); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.base+"/"+method, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var api apiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&api); err != nil {
+		return err
+	}
+	if !api.OK {
+		return fmt.Errorf("telegram %s: %s", method, api.Description)
+	}
+	return nil
+}
+
 // typing keeps the "typing…" indicator alive while an answer is produced;
 // telegram shows it for ~5s per sendChatAction, so re-send until stopped.
 func (t *Telegram) typing(ctx context.Context, chatID int64) (stop func()) {
@@ -196,6 +297,26 @@ func (t *Telegram) Poll(ctx context.Context) {
 					continue // taps on messages too old for telegram to echo back
 				}
 				t.send(ctx, q.Message.Chat.ID, t.callback(ctx, q.From.ID, q.Data))
+				continue
+			}
+			if m := u.Message; m != nil && (len(m.Photo) > 0 || m.Document != nil) {
+				if t.file == nil {
+					continue
+				}
+				f := tgFile{Caption: m.Caption}
+				if m.Document != nil {
+					f.ID, f.Name = m.Document.FileID, m.Document.FileName
+				} else {
+					f.ID = m.Photo[len(m.Photo)-1].FileID // last PhotoSize = largest
+				}
+				from := m.From.ID
+				if from == 0 {
+					from = m.Chat.ID
+				}
+				stop := t.typing(ctx, m.Chat.ID)
+				reply := t.file(ctx, from, f)
+				stop()
+				t.send(ctx, m.Chat.ID, reply)
 				continue
 			}
 			if u.Message == nil || u.Message.Text == "" {

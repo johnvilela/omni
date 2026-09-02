@@ -140,6 +140,84 @@ func TestAgentAnswerCodex(t *testing.T) {
 	}
 }
 
+// TestAgentAnswerSendFile: a TOOL:send_file line in the agent reply uploads
+// the file and the stored history keeps the 📎 confirmation, never the line.
+func TestAgentAnswerSendFile(t *testing.T) {
+	srv, store := newLLMTestServer(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store.AddPairing("telegram", "42", "CODE")
+	store.ApprovePairing("telegram", "CODE")
+	calls := make(chan map[string]any, 8)
+	fake := fakeMediaAPI(t, calls)
+	srv.tg = NewTelegram(fake.URL, "TOKEN")
+
+	payload := filepath.Join(t.TempDir(), "out.pdf")
+	if err := os.WriteFile(payload, []byte("PDF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	result := `{"result":"done\nTOOL:send_file {\"path\":\"` + payload + `\"}","session_id":"v1"}`
+	script := "#!/bin/sh\necho '" + result + "'\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	store.AddSession("s1", true, "claude")
+	store.SetActiveSession("s1")
+	// past exchange so the background nameSession call never fires
+	store.AddMessage("s1", "user", "seed", 1)
+	store.AddMessage("s1", "assistant", "seeded", 2)
+
+	sess, _, _ := store.Session("s1")
+	reply := srv.agentAnswer(context.Background(), sess, "make the pdf")
+	if reply != "done\n📎 sent out.pdf" {
+		t.Fatalf("reply = %q; want done + 📎 confirmation", reply)
+	}
+	up := nextCall(t, calls, "sendDocument")
+	if up["chat_id"] != "42" || up["filename"] != "out.pdf" || up["bytes"] != "PDF" {
+		t.Fatalf("sendDocument call = %v", up)
+	}
+	ms, _ := store.Messages("s1")
+	last := ms[len(ms)-1].Content
+	if strings.Contains(last, "TOOL:") || !strings.Contains(last, "📎 sent out.pdf") {
+		t.Fatalf("stored assistant message = %q; want 📎, no TOOL line", last)
+	}
+}
+
+// TestEnsureAgentDirAppendsContract: pre-existing workspaces get the
+// send_file contract appended once, owner edits preserved.
+func TestEnsureAgentDirAppendsContract(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	dir := agentDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	owned := "# my custom notes\ndo not lose this\n"
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(owned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureAgentDir(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if !strings.HasPrefix(string(raw), owned) || !strings.Contains(string(raw), "TOOL:send_file") {
+		t.Fatalf("AGENTS.md = %q; want owner text kept + contract appended", raw)
+	}
+	if err := ensureAgentDir(); err != nil { // idempotent
+		t.Fatal(err)
+	}
+	again, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if string(again) != string(raw) {
+		t.Fatal("second ensureAgentDir changed AGENTS.md; want no-op")
+	}
+	// the absent file was seeded fresh — the seed already carries the contract
+	seeded, _ := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if !strings.Contains(string(seeded), "TOOL:send_file") {
+		t.Fatal("fresh seed missing the send_file contract")
+	}
+}
+
 // TestAgentAnswerClaudeError: a claude result with is_error must surface as
 // an error notice, not as a normal reply.
 func TestAgentAnswerClaudeError(t *testing.T) {
