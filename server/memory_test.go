@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +32,10 @@ func TestCompaction(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, app), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"), []byte("token_budget: 20\n"), 0o600); err != nil {
+	// 20 usable tokens on top of the constant tool-section overhead
+	overhead := estTokens("\n\n" + cronPrompt(store))
+	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"),
+		[]byte(fmt.Sprintf("token_budget: %d\n", overhead+20)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

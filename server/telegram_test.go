@@ -150,7 +150,7 @@ func TestTelegramRegisterCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmds, _ := (<-got)["commands"].([]any)
-	want := []string{"new", "agent", "sessions", "usage"}
+	want := []string{"new", "agent", "sessions", "usage", "crons"}
 	if len(cmds) != len(want) {
 		t.Fatalf("registered %d commands; want %d", len(cmds), len(want))
 	}

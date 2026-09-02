@@ -267,6 +267,46 @@ func TestStoreMessages(t *testing.T) {
 	}
 }
 
+func TestStoreCrons(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	id, err := s.AddCron("0 8 * * *", "message", "drink water")
+	if err != nil || id == 0 {
+		t.Fatalf("AddCron = %d, %v", id, err)
+	}
+	id2, _ := s.AddCron("0 9 * * 3", "prompt", "motivate me")
+
+	cs, err := s.Crons()
+	if err != nil || len(cs) != 2 || cs[0].ID != id || cs[0].Kind != "message" || cs[0].Text != "drink water" {
+		t.Fatalf("Crons = %+v, %v", cs, err)
+	}
+
+	if ok, err := s.UpdateCron(id, "30 8 * * *", "message", "hydrate"); err != nil || !ok {
+		t.Fatalf("UpdateCron = %v, %v", ok, err)
+	}
+	cs, _ = s.Crons()
+	if cs[0].Schedule != "30 8 * * *" || cs[0].Text != "hydrate" {
+		t.Fatalf("after update = %+v", cs[0])
+	}
+	if ok, _ := s.UpdateCron(999, "* * * * *", "message", "x"); ok {
+		t.Fatal("UpdateCron(unknown) = true")
+	}
+
+	if ok, err := s.DeleteCron(id2); err != nil || !ok {
+		t.Fatalf("DeleteCron = %v, %v", ok, err)
+	}
+	if ok, _ := s.DeleteCron(id2); ok {
+		t.Fatal("DeleteCron(gone) = true")
+	}
+	if cs, _ = s.Crons(); len(cs) != 1 {
+		t.Fatalf("Crons after delete = %+v", cs)
+	}
+}
+
 func TestStoreUsage(t *testing.T) {
 	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -46,6 +47,8 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		return s.listSessions()
 	case "/usage":
 		return s.listUsage(ctx)
+	case "/crons":
+		return s.listCrons()
 	}
 	if pick, rest, ok := cutAtProvider(text); ok {
 		return s.atProvider(ctx, pick, rest)
@@ -147,6 +150,44 @@ func (s *Server) listSessions() tgReply {
 		kb = append(kb, []button{{Text: label, CallbackData: r.ID}})
 	}
 	return tgReply{Text: "sessions — tap to resume:", Keyboard: kb}
+}
+
+// listCrons renders the scheduled jobs with a delete button per job.
+func (s *Server) listCrons() tgReply {
+	cs, err := s.store.Crons()
+	if err != nil {
+		return tgReply{Text: "⚠ " + err.Error()}
+	}
+	if len(cs) == 0 {
+		return tgReply{Text: "no scheduled jobs — just ask for a reminder"}
+	}
+	var b strings.Builder
+	var kb [][]button
+	for _, c := range cs {
+		fmt.Fprintf(&b, "#%d · %s · %s\n%s\n", c.ID, c.Schedule, c.Kind, c.Text)
+		label := c.Text
+		if runes := []rune(label); len(runes) > 30 {
+			label = string(runes[:30]) + "…"
+		}
+		kb = append(kb, []button{{Text: fmt.Sprintf("🗑 #%d %s", c.ID, label), CallbackData: fmt.Sprintf("cron-del:%d", c.ID)}})
+	}
+	return tgReply{Text: strings.TrimSpace(b.String()), Keyboard: kb}
+}
+
+// deleteCronCallback handles a 🗑 button tap from /crons.
+func (s *Server) deleteCronCallback(data string) tgReply {
+	id, err := strconv.ParseInt(data, 10, 64)
+	if err != nil {
+		return tgReply{Text: "⚠ bad job id"}
+	}
+	ok, err := s.store.DeleteCron(id)
+	if err != nil {
+		return tgReply{Text: "⚠ " + err.Error()}
+	}
+	if !ok {
+		return tgReply{Text: fmt.Sprintf("job #%d not found", id)}
+	}
+	return tgReply{Text: fmt.Sprintf("🗑 removed #%d", id)}
 }
 
 // resumeSession points the active pointer at an existing session.

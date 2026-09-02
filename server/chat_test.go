@@ -167,9 +167,13 @@ func TestChatAnswerCreatesSession(t *testing.T) {
 	if len(ms) != 2 || ms[0].Role != "user" || ms[0].Content != "ping" || ms[1].Role != "assistant" || ms[1].Content != "pong" {
 		t.Fatalf("Messages = %+v; want the exchange", ms)
 	}
-	// first message of a fresh install is the bare text, exactly like today
-	if prompts := rec.all(); len(prompts) == 0 || prompts[0] != "ping" {
-		t.Fatalf("first prompt = %v; want bare ping", prompts)
+	// every chat prompt carries the tool section (the llm must always know
+	// its tools), then the message — the old bare-text degenerate case now
+	// lives only below composePrompt
+	if prompts := rec.all(); len(prompts) == 0 ||
+		!strings.Contains(prompts[0], "## Scheduled jobs") ||
+		!strings.HasSuffix(prompts[0], "New user message (answer this):\nping") {
+		t.Fatalf("first prompt = %v; want tool section + framed ping", prompts)
 	}
 }
 
@@ -225,7 +229,10 @@ func TestChatAnswerBudget(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, app), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"), []byte("token_budget: 20\n"), 0o600); err != nil {
+	// 20 usable tokens on top of the constant tool-section overhead
+	overhead := estTokens("\n\n" + cronPrompt(store))
+	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"),
+		[]byte(fmt.Sprintf("token_budget: %d\n", overhead+20)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	long := strings.Repeat("a", 100) // 25 est. tokens: never fits a 20 budget

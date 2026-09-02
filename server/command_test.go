@@ -82,6 +82,39 @@ func TestCommandResume(t *testing.T) {
 	}
 }
 
+func TestCommandCrons(t *testing.T) {
+	srv, store := newTestServer(t)
+	if reply := srv.handleMessage(context.Background(), "/crons"); reply.Keyboard != nil || !strings.Contains(reply.Text, "no scheduled jobs") {
+		t.Fatalf("/crons empty = %+v", reply)
+	}
+
+	store.AddCron("0 8 * * *", "message", "drink water")
+	store.AddCron("0 9 * * 3", "agent", "scan for gigs")
+	reply := srv.handleMessage(context.Background(), "/crons")
+	for _, want := range []string{"#1", "0 8 * * *", "drink water", "#2", "agent", "scan for gigs"} {
+		if !strings.Contains(reply.Text, want) {
+			t.Fatalf("/crons missing %q:\n%s", want, reply.Text)
+		}
+	}
+	if len(reply.Keyboard) != 2 || reply.Keyboard[0][0].CallbackData != "cron-del:1" ||
+		!strings.Contains(reply.Keyboard[1][0].Text, "🗑") {
+		t.Fatalf("/crons keyboard = %+v", reply.Keyboard)
+	}
+
+	// delete via button tap (approved sender), prefix routed apart from resume
+	store.AddPairing("telegram", "99", "CODE1234")
+	store.ApprovePairing("telegram", "CODE1234")
+	if r := srv.gatedCallback(context.Background(), 99, "cron-del:2"); !strings.Contains(r.Text, "#2") {
+		t.Fatalf("cron delete callback = %q", r.Text)
+	}
+	if cs, _ := store.Crons(); len(cs) != 1 || cs[0].ID != 1 {
+		t.Fatalf("crons after delete = %+v", cs)
+	}
+	if r := srv.gatedCallback(context.Background(), 99, "cron-del:2"); !strings.Contains(r.Text, "not found") {
+		t.Fatalf("delete gone = %q", r.Text)
+	}
+}
+
 func TestCommandAgentStart(t *testing.T) {
 	srv, store := newLLMTestServer(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())

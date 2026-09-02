@@ -55,6 +55,8 @@ func main() {
 		}
 	}
 
+	go srv.runCrons(context.Background())
+
 	addr := os.Getenv("OMNI_ADDR")
 	if addr == "" {
 		addr = defaultAddr

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -107,12 +108,16 @@ Ask the bot owner to approve with:
 	return tgReply{Text: "⚠ not authorized — pairing " + p.Code + " awaiting approval"}
 }
 
-// gatedCallback lets only approved senders resume sessions from button taps;
-// anyone else gets silence (their spinner was already answered).
+// gatedCallback lets only approved senders act on button taps; anyone else
+// gets silence (their spinner was already answered). Data is a session uuid
+// (resume) or a "cron-del:<id>" (delete from /crons).
 func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgReply {
 	p, ok, err := s.store.Pairing("telegram", strconv.FormatInt(fromID, 10))
 	if err != nil || !ok || !p.Approved {
 		return tgReply{}
+	}
+	if id, ok := strings.CutPrefix(data, "cron-del:"); ok {
+		return s.deleteCronCallback(id)
 	}
 	return s.resumeSession(data)
 }

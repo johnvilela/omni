@@ -24,6 +24,7 @@ type Server struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	botUser string
+	tg      *Telegram // live instance for proactive sends (crons)
 
 	pairMu   sync.Mutex
 	pairHits map[int64]*pairHit
@@ -67,6 +68,7 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 	pollCtx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.botUser = username
+	s.tg = tg
 	s.mu.Unlock()
 	go tg.Poll(pollCtx)
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -60,6 +61,15 @@ func OpenStore(path string) (*Store, error) {
 			session_id TEXT NOT NULL,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
+		// scheduled jobs fired by the minute ticker; kind: message (sent
+		// as-is) | prompt (answered by the llm) | agent (one-shot agent run)
+		`CREATE TABLE IF NOT EXISTS crons (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			schedule TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			text TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
 		// one row per llm call omni made; cost only when the provider
@@ -286,6 +296,57 @@ func (s *Store) Messages(sessionID string) ([]Message, error) {
 		ms = append(ms, m)
 	}
 	return ms, rows.Err()
+}
+
+// Cron is one scheduled job.
+type Cron struct {
+	ID                   int64
+	Schedule, Kind, Text string
+}
+
+func (s *Store) AddCron(schedule, kind, text string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO crons (schedule, kind, text, created_at)
+		VALUES (?, ?, ?, ?) RETURNING id`, schedule, kind, text, time.Now().Unix()).Scan(&id)
+	return id, err
+}
+
+func (s *Store) Crons() ([]Cron, error) {
+	rows, err := s.db.Query(`SELECT id, schedule, kind, text FROM crons ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cs []Cron
+	for rows.Next() {
+		var c Cron
+		if err := rows.Scan(&c.ID, &c.Schedule, &c.Kind, &c.Text); err != nil {
+			return nil, err
+		}
+		cs = append(cs, c)
+	}
+	return cs, rows.Err()
+}
+
+// UpdateCron rewrites one job; false means the id doesn't exist.
+func (s *Store) UpdateCron(id int64, schedule, kind, text string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE crons SET schedule = ?, kind = ?, text = ? WHERE id = ?`,
+		schedule, kind, text, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// DeleteCron removes one job; false means there was none.
+func (s *Store) DeleteCron(id int64) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM crons WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // Usage is one provider's aggregated llm consumption.

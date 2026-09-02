@@ -119,11 +119,13 @@ func (s *Server) ChatAnswer(ctx context.Context, text string) (string, error) {
 	if wiki != "" {
 		memory = readMemory(wiki)
 	}
-	prompt, dropped := composePrompt(readPersona(), memory, history, text, tokenBudget())
+	persona := readPersona() + "\n\n" + cronPrompt(s.store)
+	prompt, dropped := composePrompt(persona, memory, history, text, tokenBudget())
 	reply, err := s.answerWith(ctx, sess.Provider, prompt)
 	if err != nil {
 		return "", err
 	}
+	reply = s.applyTools(reply) // history keeps confirmations, not TOOL lines
 	if _, err := s.store.AddMessage(sess.ID, "assistant", reply, time.Now().Unix()); err != nil {
 		return "", err
 	}
