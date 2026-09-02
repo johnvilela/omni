@@ -56,10 +56,10 @@ func (s *Server) Answer(ctx context.Context, text string) (string, error) {
 		reply, err = askAPI(ctx, def.Name, key, text)
 	case "oauth":
 		cli := cliArgs(def.Name, text)
-		reply, err = runCLI(ctx, cli[0], cli[1:]...)
+		reply, err = runCLI(ctx, "", 2*time.Minute, cli[0], cli[1:]...)
 	case "claude-code":
 		cli := cliArgs("claude", text)
-		reply, err = runCLI(ctx, cli[0], cli[1:]...)
+		reply, err = runCLI(ctx, "", 2*time.Minute, cli[0], cli[1:]...)
 	}
 	if err != nil {
 		return "", err
@@ -120,13 +120,14 @@ func cliArgs(provider, text string) []string {
 }
 
 // runCLI shells out to a vendor CLI (codex/claude/gemini) whose stored login
-// omni can't use directly. ponytail: stdout taken as-is; refine flags per CLI
-// if the output turns out noisy.
-func runCLI(ctx context.Context, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+// omni can't use directly. dir "" inherits the server's cwd. ponytail: stdout
+// taken as-is; refine flags per CLI if the output turns out noisy.
+func runCLI(ctx context.Context, dir string, timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var out, errb bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {

@@ -35,12 +35,12 @@ func TestPairingGateRateLimited(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 1; i <= pairReplyLimit; i++ {
-		if reply := srv.gatedAnswer(ctx, 77, "hi"); reply == "" {
+		if reply := srv.gatedAnswer(ctx, 77, "hi"); reply.Text == "" {
 			t.Fatalf("reply %d empty, want the first %d answered", i, pairReplyLimit)
 		}
 	}
-	if reply := srv.gatedAnswer(ctx, 77, "hi"); reply != "" {
-		t.Fatalf("rate-limited sender still answered: %q", reply)
+	if reply := srv.gatedAnswer(ctx, 77, "hi"); reply.Text != "" {
+		t.Fatalf("rate-limited sender still answered: %q", reply.Text)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestPairingGatePendingCap(t *testing.T) {
 		}
 	}
 
-	reply := srv.gatedAnswer(context.Background(), 77, "hi")
+	reply := srv.gatedAnswer(context.Background(), 77, "hi").Text
 	if !strings.Contains(reply, "try again later") {
 		t.Fatalf("at the cap, want a busy notice, got:\n%s", reply)
 	}
@@ -66,7 +66,7 @@ func TestPairingGate(t *testing.T) {
 	ctx := context.Background()
 
 	// first contact: full pairing message with id, code and approve command
-	first := srv.gatedAnswer(ctx, 99, "hello")
+	first := srv.gatedAnswer(ctx, 99, "hello").Text
 	for _, want := range []string{"access not configured", "99", "pairing approve telegram"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("first contact missing %q in:\n%s", want, first)
@@ -81,7 +81,7 @@ func TestPairingGate(t *testing.T) {
 	}
 
 	// later messages: short error with the same code, not the full message
-	second := srv.gatedAnswer(ctx, 99, "again")
+	second := srv.gatedAnswer(ctx, 99, "again").Text
 	for _, want := range []string{"awaiting approval", p.Code} {
 		if !strings.Contains(second, want) {
 			t.Errorf("second contact missing %q in:\n%s", want, second)
@@ -95,7 +95,7 @@ func TestPairingGate(t *testing.T) {
 	if id, _ := store.ApprovePairing("telegram", p.Code); id != "99" {
 		t.Fatalf("ApprovePairing = %q, want 99", id)
 	}
-	third := srv.gatedAnswer(ctx, 99, "now?")
+	third := srv.gatedAnswer(ctx, 99, "now?").Text
 	if strings.Contains(third, "access not configured") || strings.Contains(third, "awaiting approval") {
 		t.Errorf("approved user still gated:\n%s", third)
 	}

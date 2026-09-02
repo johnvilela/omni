@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"slices"
 	"sync"
@@ -50,9 +51,13 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 	}
 	tg := NewTelegram(s.apiBase, token)
 	tg.answer = s.gatedAnswer
+	tg.callback = s.gatedCallback
 	username, err := tg.GetMe(ctx)
 	if err != nil {
 		return channelStatus{}, http.StatusUnauthorized, err
+	}
+	if err := tg.registerCommands(ctx); err != nil {
+		log.Printf("telegram: setMyCommands: %v", err) // best-effort: menu only
 	}
 
 	s.mu.Lock()

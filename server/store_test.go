@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -69,10 +70,10 @@ func TestStoreSessions(t *testing.T) {
 	}
 
 	// max id wins: ids are opaque strings, uuid7 order == lexicographic
-	if err := s.AddSession("a"); err != nil {
+	if err := s.AddSession("a", false, ""); err != nil {
 		t.Fatalf("AddSession: %v", err)
 	}
-	if err := s.AddSession("b"); err != nil {
+	if err := s.AddSession("b", false, ""); err != nil {
 		t.Fatalf("AddSession: %v", err)
 	}
 	sess, ok, err := s.ActiveSession()
@@ -97,6 +98,119 @@ func TestStoreSessions(t *testing.T) {
 	sess, _, _ = s2.ActiveSession()
 	if sess.ID != "b" || sess.Name != "trip planning" || sess.ConsolidatedUntil != 7 {
 		t.Fatalf("ActiveSession after reopen = %+v", sess)
+	}
+}
+
+func TestStoreActivePointer(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	if err := s.AddSession("a", false, ""); err != nil {
+		t.Fatalf("AddSession: %v", err)
+	}
+	if err := s.AddSession("b", true, "claude"); err != nil {
+		t.Fatalf("AddSession: %v", err)
+	}
+
+	// no pointer yet: max id fallback, agent fields round-trip
+	sess, ok, err := s.ActiveSession()
+	if err != nil || !ok || sess.ID != "b" || !sess.Agent || sess.Provider != "claude" {
+		t.Fatalf("ActiveSession = %+v, ok %v, %v; want agent session b", sess, ok, err)
+	}
+
+	// pointer beats max id
+	if err := s.SetActiveSession("a"); err != nil {
+		t.Fatalf("SetActiveSession: %v", err)
+	}
+	if sess, _, _ = s.ActiveSession(); sess.ID != "a" || sess.Agent {
+		t.Fatalf("ActiveSession = %+v; want chat session a", sess)
+	}
+
+	// pointer is an upsert: re-point back
+	if err := s.SetActiveSession("b"); err != nil {
+		t.Fatalf("SetActiveSession: %v", err)
+	}
+	if sess, _, _ = s.ActiveSession(); sess.ID != "b" {
+		t.Fatalf("ActiveSession = %+v; want b again", sess)
+	}
+
+	// vendor session id persists
+	if err := s.SetVendorSessionID("b", "vend-123"); err != nil {
+		t.Fatalf("SetVendorSessionID: %v", err)
+	}
+	sess, ok, err = s.Session("b")
+	if err != nil || !ok || sess.VendorSessionID != "vend-123" {
+		t.Fatalf("Session(b) = %+v, ok %v, %v; want vend-123", sess, ok, err)
+	}
+	if _, ok, err = s.Session("nope"); err != nil || ok {
+		t.Fatalf("Session(unknown) = ok %v, %v; want false, nil", ok, err)
+	}
+}
+
+func TestStoreRecentSessions(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	for _, id := range []string{"a", "b", "c", "d", "e", "f"} {
+		if err := s.AddSession(id, id == "f", ""); err != nil {
+			t.Fatalf("AddSession: %v", err)
+		}
+	}
+	s.SetSessionName("e", "trip planning")
+	s.AddMessage("d", "user", "first message of d", 1)
+
+	got, err := s.RecentSessions(5)
+	if err != nil || len(got) != 5 {
+		t.Fatalf("RecentSessions = %d rows, %v; want 5", len(got), err)
+	}
+	if got[0].ID != "f" || !got[0].Agent {
+		t.Fatalf("RecentSessions[0] = %+v; want newest agent session f", got[0])
+	}
+	if got[1].ID != "e" || got[1].Name != "trip planning" {
+		t.Fatalf("RecentSessions[1] = %+v; want named e", got[1])
+	}
+	if got[2].ID != "d" || got[2].FirstMsg != "first message of d" {
+		t.Fatalf("RecentSessions[2] = %+v; want d with first-message fallback", got[2])
+	}
+	if got[4].ID != "b" {
+		t.Fatalf("RecentSessions[4] = %+v; want b (a dropped)", got[4])
+	}
+}
+
+// TestStoreMigratesOldSchema: a DB created before the agent columns existed
+// must gain them via the guarded ALTERs on reopen.
+func TestStoreMigratesOldSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "omni.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sessions (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL DEFAULT '',
+		consolidated_until INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO sessions (id, name) VALUES ('old', 'kept')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore over old schema: %v", err)
+	}
+	defer s.Close()
+	sess, ok, err := s.ActiveSession()
+	if err != nil || !ok || sess.ID != "old" || sess.Name != "kept" || sess.Agent {
+		t.Fatalf("ActiveSession = %+v, ok %v, %v; want migrated old session", sess, ok, err)
 	}
 }
 

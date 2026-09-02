@@ -24,6 +24,9 @@ func newTestServer(t *testing.T) (*Server, *Store) {
 	mux.HandleFunc("/botGOOD/getUpdates", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"ok":true,"result":[]}`)
 	})
+	mux.HandleFunc("/botGOOD/setMyCommands", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"ok":true,"result":true}`)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"ok":false,"description":"Unauthorized"}`)
 	})

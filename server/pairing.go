@@ -65,35 +65,35 @@ func newPairingCode() string {
 	return string(b)
 }
 
-// gatedAnswer lets only paired senders through to the llm answer flow.
+// gatedAnswer lets only paired senders through to the command/answer flow.
 // An unknown sender gets the full pairing instructions once; after that a
 // short reminder until the owner approves the code.
-func (s *Server) gatedAnswer(ctx context.Context, fromID int64, text string) string {
+func (s *Server) gatedAnswer(ctx context.Context, fromID int64, text string) tgReply {
 	id := strconv.FormatInt(fromID, 10)
 	p, ok, err := s.store.Pairing("telegram", id)
 	if err != nil {
 		log.Printf("pairing: %v", err)
-		return "⚠ internal error, try again"
+		return tgReply{Text: "⚠ internal error, try again"}
 	}
 	if ok && p.Approved {
-		return s.answerNotice(ctx, text)
+		return s.handleMessage(ctx, text)
 	}
 	if !s.allowPairReply(fromID, time.Now()) {
-		return "" // rate-limited: the poller sends nothing
+		return tgReply{} // rate-limited: the poller sends nothing
 	}
 	if !ok {
 		if n, err := s.store.PendingPairings("telegram"); err != nil {
 			log.Printf("pairing: %v", err)
-			return "⚠ internal error, try again"
+			return tgReply{Text: "⚠ internal error, try again"}
 		} else if n >= maxPendingPairings {
-			return "⚠ pairing is busy — try again later"
+			return tgReply{Text: "⚠ pairing is busy — try again later"}
 		}
 		code := newPairingCode()
 		if err := s.store.AddPairing("telegram", id, code); err != nil {
 			log.Printf("pairing: %v", err)
-			return "⚠ internal error, try again"
+			return tgReply{Text: "⚠ internal error, try again"}
 		}
-		return fmt.Sprintf(`%s: access not configured.
+		return tgReply{Text: fmt.Sprintf(`%s: access not configured.
 
 Your Telegram user id: %s
 Pairing code:
@@ -102,7 +102,17 @@ Pairing code:
 
 Ask the bot owner to approve with:
 
-%s pairing approve telegram %s`, app, id, code, app, code)
+%s pairing approve telegram %s`, app, id, code, app, code)}
 	}
-	return "⚠ not authorized — pairing " + p.Code + " awaiting approval"
+	return tgReply{Text: "⚠ not authorized — pairing " + p.Code + " awaiting approval"}
+}
+
+// gatedCallback lets only approved senders resume sessions from button taps;
+// anyone else gets silence (their spinner was already answered).
+func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgReply {
+	p, ok, err := s.store.Pairing("telegram", strconv.FormatInt(fromID, 10))
+	if err != nil || !ok || !p.Approved {
+		return tgReply{}
+	}
+	return s.resumeSession(data)
 }

@@ -13,5 +13,5 @@ Every non-stdlib package in `go.mod` and why it was added (2026-09-01):
 
 Deliberately NOT added:
 
-- No Telegram bot library — the server needs exactly three Bot API methods (`getMe`, `getUpdates`, `sendMessage`), all plain JSON over HTTPS via stdlib `net/http` in `server/telegram.go`. If the integration grows (keyboards, media, webhooks), adopt `github.com/go-telegram/bot` (zero-dep, actively maintained, on Telegram's official list). Do NOT use `go-telegram-bot-api` — unmaintained since ~2021.
+- No Telegram bot library — the server needs six Bot API methods (`getMe`, `getUpdates`, `sendMessage`, `sendChatAction`, `answerCallbackQuery`, `setMyCommands`), all plain JSON over HTTPS via stdlib `net/http` in `server/telegram.go`. Revisited when inline keyboards arrived (v0.4.0): stdlib still won — 3 structs + one send helper vs. rewriting telegram.go around a library. The `github.com/go-telegram/bot` trigger narrows to media or webhooks. Do NOT use `go-telegram-bot-api` — unmaintained since ~2021.
 - No CLI framework (cobra etc.) — command routing is a small switch in `cli/main.go`.

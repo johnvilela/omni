@@ -87,7 +87,7 @@ func TestCompactionEmptyDigest(t *testing.T) {
 	if err := writeMemory(wiki, "keep me"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AddSession("s1"); err != nil {
+	if err := store.AddSession("s1", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	id, err := store.AddMessage("s1", "user", "secret fact", 1)

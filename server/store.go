@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -36,12 +37,22 @@ func OpenStore(path string) (*Store, error) {
 			PRIMARY KEY (channel, user_id)
 		)`,
 		// id is a uuid7: lexicographic order == chronological, so the max id
-		// is the active session. consolidated_until is the highest messages.id
-		// already folded into long-term memory.
+		// is the newest session (the active fallback when the pointer table is
+		// empty). consolidated_until is the highest messages.id already folded
+		// into long-term memory. agent sessions run the vendor CLI un-bare;
+		// vendor_session_id is the CLI's own session to --resume.
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL DEFAULT '',
-			consolidated_until INTEGER NOT NULL DEFAULT 0
+			consolidated_until INTEGER NOT NULL DEFAULT 0,
+			agent INTEGER NOT NULL DEFAULT 0,
+			provider TEXT NOT NULL DEFAULT '',
+			vendor_session_id TEXT NOT NULL DEFAULT ''
+		)`,
+		// one-row pointer to the active session; empty means "newest wins"
+		`CREATE TABLE IF NOT EXISTS active (
+			k INTEGER PRIMARY KEY CHECK (k = 1),
+			session_id TEXT NOT NULL
 		)`,
 		// ponytail: no index/FK — single user, tiny data; add if it ever grows.
 		`CREATE TABLE IF NOT EXISTS messages (
@@ -53,6 +64,18 @@ func OpenStore(path string) (*Store, error) {
 		)`,
 	} {
 		if _, err := db.Exec(ddl); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	// migrate pre-agent DBs; on fresh installs the CREATE above already has
+	// the columns and these fail with "duplicate column name" — ignored.
+	for _, ddl := range []string{
+		`ALTER TABLE sessions ADD COLUMN agent INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN vendor_session_id TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(ddl); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
 			return nil, err
 		}
@@ -135,12 +158,30 @@ func (s *Store) RevokePairing(channel, userID string) (bool, error) {
 	return n > 0, err
 }
 
-// ActiveSession returns the session with the max id (uuid7: the newest);
-// false means no session exists yet.
+// ActiveSession returns the session the active pointer names, falling back
+// to the max id (uuid7: the newest) when no pointer was ever set; false means
+// no session exists yet.
 func (s *Store) ActiveSession() (Session, bool, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT session_id FROM active WHERE k = 1`).Scan(&id)
+	if err == sql.ErrNoRows {
+		err = s.db.QueryRow(`SELECT id FROM sessions ORDER BY id DESC LIMIT 1`).Scan(&id)
+	}
+	if err == sql.ErrNoRows {
+		return Session{}, false, nil
+	}
+	if err != nil {
+		return Session{}, false, err
+	}
+	return s.Session(id)
+}
+
+// Session looks one session up by id; false means it doesn't exist.
+func (s *Store) Session(id string) (Session, bool, error) {
 	var sess Session
-	err := s.db.QueryRow(`SELECT id, name, consolidated_until FROM sessions ORDER BY id DESC LIMIT 1`).
-		Scan(&sess.ID, &sess.Name, &sess.ConsolidatedUntil)
+	err := s.db.QueryRow(`SELECT id, name, consolidated_until, agent, provider, vendor_session_id
+		FROM sessions WHERE id = ?`, id).
+		Scan(&sess.ID, &sess.Name, &sess.ConsolidatedUntil, &sess.Agent, &sess.Provider, &sess.VendorSessionID)
 	if err == sql.ErrNoRows {
 		return Session{}, false, nil
 	}
@@ -150,9 +191,47 @@ func (s *Store) ActiveSession() (Session, bool, error) {
 	return sess, true, nil
 }
 
-func (s *Store) AddSession(id string) error {
-	_, err := s.db.Exec(`INSERT INTO sessions (id) VALUES (?)`, id)
+func (s *Store) AddSession(id string, agent bool, provider string) error {
+	_, err := s.db.Exec(`INSERT INTO sessions (id, agent, provider) VALUES (?, ?, ?)`, id, agent, provider)
 	return err
+}
+
+func (s *Store) SetActiveSession(id string) error {
+	_, err := s.db.Exec(`INSERT INTO active (k, session_id) VALUES (1, ?)
+		ON CONFLICT(k) DO UPDATE SET session_id = excluded.session_id`, id)
+	return err
+}
+
+func (s *Store) SetVendorSessionID(id, vendorID string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET vendor_session_id = ? WHERE id = ?`, vendorID, id)
+	return err
+}
+
+// RecentSession is one row of the /sessions listing.
+type RecentSession struct {
+	ID, Name, FirstMsg string
+	Agent              bool
+}
+
+// RecentSessions lists the n newest sessions with the first user message as
+// the display fallback for unnamed ones.
+func (s *Store) RecentSessions(n int) ([]RecentSession, error) {
+	rows, err := s.db.Query(`SELECT id, name, agent,
+		COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id ORDER BY m.id LIMIT 1), '')
+		FROM sessions s ORDER BY id DESC LIMIT ?`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var rs []RecentSession
+	for rows.Next() {
+		var r RecentSession
+		if err := rows.Scan(&r.ID, &r.Name, &r.Agent, &r.FirstMsg); err != nil {
+			return nil, err
+		}
+		rs = append(rs, r)
+	}
+	return rs, rows.Err()
 }
 
 func (s *Store) SetSessionName(id, name string) error {

@@ -8,13 +8,26 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"unicode/utf8"
 )
+
+type button struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
+// tgReply is one outgoing message: text plus an optional inline keyboard.
+type tgReply struct {
+	Text     string
+	Keyboard [][]button
+}
 
 // Telegram talks to the Telegram Bot API for one bot token.
 type Telegram struct {
-	base   string
-	client *http.Client
-	answer func(ctx context.Context, fromID int64, text string) string // reply to one text message
+	base     string
+	client   *http.Client
+	answer   func(ctx context.Context, fromID int64, text string) tgReply // reply to one text message
+	callback func(ctx context.Context, fromID int64, data string) tgReply // reply to one button tap
 }
 
 func NewTelegram(apiBase, token string) *Telegram {
@@ -36,6 +49,18 @@ type update struct {
 		} `json:"from"`
 		Text string `json:"text"`
 	} `json:"message"`
+	CallbackQuery *struct {
+		ID   string `json:"id"`
+		From struct {
+			ID int64 `json:"id"`
+		} `json:"from"`
+		Message *struct {
+			Chat struct {
+				ID int64 `json:"id"`
+			} `json:"chat"`
+		} `json:"message"`
+		Data string `json:"data"`
+	} `json:"callback_query"`
 }
 
 type apiResponse struct {
@@ -84,6 +109,16 @@ func (t *Telegram) GetMe(ctx context.Context) (string, error) {
 	return me.Username, nil
 }
 
+// registerCommands publishes the "/" autocomplete menu clients show when the
+// user types a slash. Idempotent — reconnecting just re-publishes.
+func (t *Telegram) registerCommands(ctx context.Context) error {
+	return t.call(ctx, "setMyCommands", map[string]any{"commands": []map[string]string{
+		{"command": "new", "description": "start a fresh chat session"},
+		{"command": "agent", "description": "start an agent session (tools + browser)"},
+		{"command": "sessions", "description": "list recent sessions — tap to resume"},
+	}}, nil)
+}
+
 // typing keeps the "typing…" indicator alive while an answer is produced;
 // telegram shows it for ~5s per sendChatAction, so re-send until stopped.
 func (t *Telegram) typing(ctx context.Context, chatID int64) (stop func()) {
@@ -103,8 +138,9 @@ func (t *Telegram) typing(ctx context.Context, chatID int64) (stop func()) {
 
 // Poll long-polls getUpdates and replies to each text message via t.answer.
 // Returns when ctx is cancelled.
-// ponytail: answers serially in the poll loop; goroutine-per-message if chat
-// volume ever matters.
+// ponytail: answers serially in the poll loop — an agent turn can hold it for
+// up to 15 min (messages queue in getUpdates, none lost); answer in a
+// goroutine through t.send if that ever hurts.
 func (t *Telegram) Poll(ctx context.Context) {
 	var offset int64
 	for ctx.Err() == nil {
@@ -124,6 +160,15 @@ func (t *Telegram) Poll(ctx context.Context) {
 		}
 		for _, u := range updates {
 			offset = u.UpdateID + 1
+			if q := u.CallbackQuery; q != nil {
+				// best-effort: stops the client's button spinner
+				t.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": q.ID}, nil)
+				if t.callback == nil || q.Message == nil {
+					continue // taps on messages too old for telegram to echo back
+				}
+				t.send(ctx, q.Message.Chat.ID, t.callback(ctx, q.From.ID, q.Data))
+				continue
+			}
 			if u.Message == nil || u.Message.Text == "" {
 				continue
 			}
@@ -134,16 +179,42 @@ func (t *Telegram) Poll(ctx context.Context) {
 			stop := t.typing(ctx, u.Message.Chat.ID)
 			reply := t.answer(ctx, from, u.Message.Text)
 			stop()
-			if reply == "" {
-				continue // silence (e.g. a rate-limited unpaired sender)
-			}
-			err := t.call(ctx, "sendMessage", map[string]any{
-				"chat_id": u.Message.Chat.ID,
-				"text":    reply,
-			}, nil)
-			if err != nil {
-				log.Printf("telegram: sendMessage: %v", err)
-			}
+			t.send(ctx, u.Message.Chat.ID, reply)
 		}
 	}
+}
+
+// send delivers one reply, chunked to telegram's 4096-char message cap; the
+// keyboard rides the last chunk. Empty text means silence (e.g. a
+// rate-limited unpaired sender) — telegram rejects empty messages anyway.
+func (t *Telegram) send(ctx context.Context, chatID int64, r tgReply) {
+	if r.Text == "" {
+		return
+	}
+	parts := chunks(r.Text, 4096)
+	for i, p := range parts {
+		body := map[string]any{"chat_id": chatID, "text": p}
+		if i == len(parts)-1 && r.Keyboard != nil {
+			body["reply_markup"] = map[string]any{"inline_keyboard": r.Keyboard}
+		}
+		if err := t.call(ctx, "sendMessage", body, nil); err != nil {
+			log.Printf("telegram: sendMessage: %v", err)
+		}
+	}
+}
+
+// chunks splits s into pieces of at most max bytes, cutting only at rune
+// boundaries (byte length ≥ UTF-16 length, so max bytes never exceeds
+// telegram's max characters).
+func chunks(s string, max int) []string {
+	var out []string
+	for len(s) > max {
+		cut := max
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		out = append(out, s[:cut])
+		s = s[cut:]
+	}
+	return append(out, s)
 }

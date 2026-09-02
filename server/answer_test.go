@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnswerNoDefault(t *testing.T) {
@@ -209,7 +210,7 @@ func TestRunCLIErrorConcise(t *testing.T) {
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(context.Background(), path)
+	_, err := runCLI(context.Background(), "", time.Minute, path)
 	if err == nil || !strings.Contains(err.Error(), "ERROR: model not supported") {
 		t.Fatalf("err = %v; want the last stderr line", err)
 	}

@@ -9,11 +9,14 @@ import (
 )
 
 // Session is one conversation thread. Single owner, channel-agnostic: the
-// active session is simply the one with the max uuid7 id.
+// active session is the one the pointer table names (newest wins when unset).
 type Session struct {
 	ID                string
 	Name              string
-	ConsolidatedUntil int64 // highest messages.id folded into long-term memory
+	ConsolidatedUntil int64  // highest messages.id folded into long-term memory
+	Agent             bool   // vendor CLI runs un-bare with full tool access
+	Provider          string // agent sessions only: "claude" | "openai"
+	VendorSessionID   string // agent sessions only: the CLI's session to --resume
 }
 
 // Message is one turn of a session.
@@ -82,7 +85,10 @@ func (s *Server) ensureSession() (Session, error) {
 		return sess, err
 	}
 	id := uuid.Must(uuid.NewV7()).String()
-	if err := s.store.AddSession(id); err != nil {
+	if err := s.store.AddSession(id, false, ""); err != nil {
+		return Session{}, err
+	}
+	if err := s.store.SetActiveSession(id); err != nil {
 		return Session{}, err
 	}
 	return Session{ID: id}, nil

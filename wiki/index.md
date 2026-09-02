@@ -3,4 +3,4 @@
 - [[install]] — scripts, install layout, dev/prod isolation (ports, paths, systemd unit)
 - [[cli]] — CLI commands, layered per-command help, and the version-mismatch alert
 - [[openai-codex-backend]] — future: direct Codex-backend HTTP for openai oauth answers (why not now, how later)
-- [[chatbot-memory]] — short-term per-chat SQLite buffer + memoria long-term layer for the telegram bot: implemented and shipped in v0.3.0 (store/chat/memory, tests green, memoria global mode bootstrapped); every provider path also runs its vendor CLI bare (no MCP/tools/user config), see [[api]]
+- [[chatbot-memory]] — short-term per-chat SQLite buffer + memoria long-term layer for the telegram bot: implemented and shipped in v0.3.0 (store/chat/memory, tests green, memoria global mode bootstrapped); chat mode runs the vendor CLIs bare (no MCP/tools/user config), agent mode (`/agent`, v0.4.0) deliberately un-bare with full tools — see [[api]]
