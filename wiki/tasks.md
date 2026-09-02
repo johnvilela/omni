@@ -21,5 +21,10 @@ trigger fires, not before.
 - **Gemini bare-CLI usage untracked** — its non-interactive output carries no
   token data, so `/usage` counts nothing for gemini oauth chat. Trigger:
   gemini becomes a daily driver (then probe its `-o json` stats shape).
+- **Doctor can't validate cron schedules.** `fireCrons` silently skips a
+  `crons` row with an unparseable schedule forever (server/cron.go), and cron
+  rows are only visible server-side — `omni doctor` has no endpoint to read
+  them. Trigger: a cron silently never fires (then add a `/crons` route or a
+  parse check at insert time).
 
 Related: [[api]], [[chatbot-memory]]

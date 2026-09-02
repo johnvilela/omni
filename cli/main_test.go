@@ -56,6 +56,16 @@ func TestRoute(t *testing.T) {
 		{[]string{"status", "--help"}, "help", "", "status", false},
 		{[]string{"status", "-h"}, "help", "", "status", false},
 		{[]string{"status", "junk"}, "", "", "", true},
+		{[]string{"doctor"}, "doctor", "", "", false},
+		{[]string{"doctor", "--help"}, "help", "", "doctor", false},
+		{[]string{"doctor", "-h"}, "help", "", "doctor", false},
+		{[]string{"doctor", "junk"}, "", "", "", true},
+		{[]string{"guardian"}, "guardian-status", "", "", false},
+		{[]string{"guardian", "--help"}, "help", "", "guardian", false},
+		{[]string{"guardian", "--enabled=false"}, "guardian-enable", "", "", false},
+		{[]string{"guardian", "--enabled=maybe"}, "", "", "", true},
+		{[]string{"guardian", "set-interval"}, "", "", "", true},
+		{[]string{"guardian", "junk"}, "", "", "", true},
 		{[]string{"frobnicate"}, "", "", "", true},
 	}
 	for _, c := range cases {
@@ -83,6 +93,16 @@ func TestRoute(t *testing.T) {
 	cmd, err = route([]string{"llm", "model", "-p", "openai", "-m", "gpt-test", "-e", "high"})
 	if err != nil || cmd.name != "llm-model" || cmd.channel != "openai" || cmd.model != "gpt-test" || cmd.effort != "high" {
 		t.Errorf("route(llm model -p -m -e) = %+v, %v", cmd, err)
+	}
+
+	// guardian set-interval carries the duration in cmd.arg
+	cmd, err = route([]string{"guardian", "set-interval", "5m"})
+	if err != nil || cmd.name != "guardian-interval" || cmd.arg != "5m" {
+		t.Errorf("route(guardian set-interval) = %+v, %v", cmd, err)
+	}
+	cmd, err = route([]string{"guardian", "--enabled=true"})
+	if err != nil || cmd.name != "guardian-enable" || cmd.arg != "true" {
+		t.Errorf("route(guardian --enabled=true) = %+v, %v", cmd, err)
 	}
 }
 
@@ -290,7 +310,7 @@ func TestRunLLMModel(t *testing.T) {
 
 func TestHelpScreens(t *testing.T) {
 	root := helpText()
-	for _, want := range []string{"omni channels", "omni status", "omni llm", "omni pairing", "--help", "-server", version} {
+	for _, want := range []string{"omni channels", "omni status", "omni doctor", "omni llm", "omni pairing", "omni guardian", "--help", "-server", version} {
 		if !strings.Contains(root, want) {
 			t.Errorf("root help missing %q", want)
 		}
@@ -320,6 +340,26 @@ func TestHelpScreens(t *testing.T) {
 	}
 	if strings.Contains(st, "██") {
 		t.Error("status help should not have the banner")
+	}
+
+	dr := helpDoctor()
+	for _, want := range []string{"omni doctor", "install", "server down"} {
+		if !strings.Contains(dr, want) {
+			t.Errorf("doctor help missing %q", want)
+		}
+	}
+	if strings.Contains(dr, "██") {
+		t.Error("doctor help should not have the banner")
+	}
+
+	gu := helpGuardian()
+	for _, want := range []string{"set-interval", "--enabled=false", "journalctl"} {
+		if !strings.Contains(gu, want) {
+			t.Errorf("guardian help missing %q", want)
+		}
+	}
+	if strings.Contains(gu, "██") {
+		t.Error("guardian help should not have the banner")
 	}
 
 	pr := helpPairing()

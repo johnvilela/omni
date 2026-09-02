@@ -25,6 +25,7 @@ func helpText() string {
 		dimStyle.Render("  a simplified, self-hosted messaging hub · "+version) + "\n\n" +
 		titleStyle.Render("  COMMANDS") + "\n\n" +
 		row("omni status", "server, channels, llm providers and alerts at a glance") +
+		row("omni doctor", "check install, config, services and llm health — with fixes") +
 		row("omni channels", "manage message channels") +
 		row("omni llm", "manage llm providers (openai, claude, gemini)") +
 		row("omni pairing", "control who may talk to the bot") +
@@ -41,6 +42,15 @@ func helpStatus() string {
 		"      " + cmdStyle.Render("omni status") + "\n\n" +
 		"      server, channels, llm providers and alerts at a glance\n" +
 		helpStyle.Render("      alerts warn when the cli and server versions differ") + "\n\n"
+}
+
+func helpDoctor() string {
+	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
+		"      " + cmdStyle.Render("omni doctor") + "\n\n" +
+		"      check everything omni needs and print the fix for what's broken\n" +
+		helpStyle.Render("      sections: install, config, services, server, recent errors.\n"+
+			"      works with the server down — that's when you need it.\n"+
+			"      exits 1 when any check fails") + "\n\n"
 }
 
 func helpPairing() string {

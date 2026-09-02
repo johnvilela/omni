@@ -56,6 +56,15 @@ func route(args []string) (command, error) {
 			return command{name: "help", topic: "status"}, nil
 		}
 		return command{}, fmt.Errorf("unknown argument %q — try `omni status --help`", args[1])
+	case "doctor":
+		if len(args) == 1 {
+			return command{name: "doctor"}, nil
+		}
+		switch args[1] {
+		case "--help", "-h":
+			return command{name: "help", topic: "doctor"}, nil
+		}
+		return command{}, fmt.Errorf("unknown argument %q — try `omni doctor --help`", args[1])
 	case "channels":
 		if len(args) == 1 {
 			return command{name: "list"}, nil
@@ -441,6 +450,25 @@ func runLLMModel(c *Client, provider, model, effort string) int {
 
 func guardianTimer() string { return app + "-guardian.timer" }
 
+// dataDir is ~/.local/share/<app> (respects XDG_DATA_HOME).
+func dataDir() string {
+	dir := os.Getenv("XDG_DATA_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dir, app)
+}
+
+// guardianAlerts reads the guardian's persisted red checks (name → red-since).
+func guardianAlerts() map[string]string {
+	st := map[string]string{}
+	if data, err := os.ReadFile(filepath.Join(dataDir(), "guardian.json")); err == nil {
+		json.Unmarshal(data, &st)
+	}
+	return st
+}
+
 func systemctlUser(args ...string) (string, error) {
 	out, err := exec.Command("systemctl", append([]string{"--user"}, args...)...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
@@ -461,15 +489,7 @@ func runGuardianStatus() int {
 	}
 
 	// active alerts = the guardian's persisted red checks
-	dir := os.Getenv("XDG_DATA_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "share")
-	}
-	st := map[string]string{}
-	if data, err := os.ReadFile(filepath.Join(dir, app, "guardian.json")); err == nil {
-		json.Unmarshal(data, &st)
-	}
+	st := guardianAlerts()
 	if len(st) == 0 {
 		fmt.Println(okStyle.Render("●") + " no active alerts")
 		return 0
@@ -544,6 +564,8 @@ func run(args []string) int {
 			fmt.Print(helpConnect())
 		case "status":
 			fmt.Print(helpStatus())
+		case "doctor":
+			fmt.Print(helpDoctor())
 		case "llm":
 			fmt.Print(helpLLM())
 		case "llm-connect":
@@ -561,6 +583,8 @@ func run(args []string) int {
 		}
 	case "status":
 		return runStatus(c)
+	case "doctor":
+		return runDoctor()
 	case "list":
 		chs, err := c.Channels()
 		if err != nil {
