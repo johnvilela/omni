@@ -515,7 +515,11 @@ func runGuardianInterval(arg string) int {
 	if err := os.MkdirAll(dropDir, 0o755); err != nil {
 		return fail(err)
 	}
-	conf := "[Timer]\nOnUnitActiveSec=\nOnUnitActiveSec=" + arg + "\n"
+	// the empty assignment resets ALL On*Sec clauses, including the base
+	// unit's OnActiveSec bootstrap — re-add it, or the timer never fires
+	// again after a restart (OnUnitActiveSec alone waits for a service
+	// activation that never comes)
+	conf := "[Timer]\nOnUnitActiveSec=\nOnActiveSec=2min\nOnUnitActiveSec=" + arg + "\n"
 	if err := os.WriteFile(filepath.Join(dropDir, "override.conf"), []byte(conf), 0o644); err != nil {
 		return fail(err)
 	}
