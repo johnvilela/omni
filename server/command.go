@@ -44,6 +44,8 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		return tgReply{Text: note + s.agentAnswer(ctx, sess, arg)}
 	case "/sessions":
 		return s.listSessions()
+	case "/usage":
+		return s.listUsage(ctx)
 	}
 	if pick, rest, ok := cutAtProvider(text); ok {
 		return s.atProvider(ctx, pick, rest)

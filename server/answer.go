@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -56,21 +57,78 @@ func (s *Server) answerWith(ctx context.Context, provider, text string) (string,
 
 	source, key := resolveLLM(def.Name, "")
 	var reply string
+	var u callUsage
 	var err error
 	switch source {
 	case "api_key":
-		reply, err = askAPI(ctx, def.Name, key, text)
+		reply, u, err = askAPI(ctx, def.Name, key, text)
 	case "oauth":
-		cli := cliArgs(def.Name, text)
-		reply, err = runCLI(ctx, "", 2*time.Minute, cli[0], cli[1:]...)
+		reply, u, err = runChatCLI(ctx, def.Name, text)
 	case "claude-code":
-		cli := cliArgs("claude", text)
-		reply, err = runCLI(ctx, "", 2*time.Minute, cli[0], cli[1:]...)
+		reply, u, err = runChatCLI(ctx, "claude", text)
 	}
 	if err != nil {
 		return "", err
 	}
+	s.recordUsage(def.Name, u)
 	return strings.TrimSpace(reply), nil
+}
+
+// callUsage is what one llm call consumed; cost only when the provider
+// reported one.
+type callUsage struct {
+	in, out int64
+	cost    float64
+}
+
+// recordUsage best-effort logs one call's consumption for /usage.
+func (s *Server) recordUsage(provider string, u callUsage) {
+	if u.in+u.out == 0 {
+		return // path with no usage data (gemini CLI)
+	}
+	if err := s.store.AddUsage(provider, u.in, u.out, u.cost, time.Now().Unix()); err != nil {
+		log.Printf("usage: %v", err)
+	}
+}
+
+// runChatCLI runs one bare chat turn on a vendor CLI, asking claude and codex
+// for structured output so token usage can be recorded. gemini has no
+// usage-bearing non-interactive output — its CLI calls go untracked.
+func runChatCLI(ctx context.Context, provider, text string) (string, callUsage, error) {
+	args := cliArgs(provider, text)
+	switch provider {
+	case "claude":
+		out, err := runCLI(ctx, "", 2*time.Minute, args[0], append(args[1:], "--output-format", "json")...)
+		if err != nil {
+			return "", callUsage{}, err
+		}
+		res, err := parseClaudeJSON(out)
+		if err != nil {
+			return "", callUsage{}, err
+		}
+		return res.Result, res.usage(), nil
+	case "openai":
+		tmp, err := os.CreateTemp("", "omni-chat-*")
+		if err != nil {
+			return "", callUsage{}, err
+		}
+		tmp.Close()
+		defer os.Remove(tmp.Name())
+		// flags must precede the positional prompt (last element of args)
+		full := append(args[:len(args)-1:len(args)-1], "--json", "-o", tmp.Name(), args[len(args)-1])
+		out, err := runCLI(ctx, "", 2*time.Minute, full[0], full[1:]...)
+		if err != nil {
+			return "", callUsage{}, err
+		}
+		_, u := parseCodexEvents(out)
+		raw, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			return "", callUsage{}, err
+		}
+		return string(raw), u, nil
+	}
+	out, err := runCLI(ctx, "", 2*time.Minute, args[0], args[1:]...)
+	return out, callUsage{}, err
 }
 
 // answerNotice is the telegram poller's entry point: history-aware, errors
@@ -153,8 +211,9 @@ func runCLI(ctx context.Context, dir string, timeout time.Duration, name string,
 	return out.String(), nil
 }
 
-// askAPI does one plain text-in/text-out call against a provider's HTTP API.
-func askAPI(ctx context.Context, provider, key, text string) (string, error) {
+// askAPI does one plain text-in/text-out call against a provider's HTTP API,
+// also returning the token usage the response reports.
+func askAPI(ctx context.Context, provider, key, text string) (string, callUsage, error) {
 	base := llmAPIBase(provider)
 	model := configuredModel(provider)
 	if model == "" {
@@ -162,6 +221,7 @@ func askAPI(ctx context.Context, provider, key, text string) (string, error) {
 	}
 	var req *http.Request
 	var err error
+	var u callUsage
 	parse := func(*json.Decoder) (string, error) { return "", nil }
 
 	switch provider {
@@ -180,10 +240,15 @@ func askAPI(ctx context.Context, provider, key, text string) (string, error) {
 						Content string `json:"content"`
 					} `json:"message"`
 				} `json:"choices"`
+				Usage struct {
+					In  int64 `json:"prompt_tokens"`
+					Out int64 `json:"completion_tokens"`
+				} `json:"usage"`
 			}
 			if err := d.Decode(&r); err != nil || len(r.Choices) == 0 {
 				return "", fmt.Errorf("openai: bad response: %v", err)
 			}
+			u = callUsage{in: r.Usage.In, out: r.Usage.Out}
 			return r.Choices[0].Message.Content, nil
 		}
 	case "claude":
@@ -201,10 +266,15 @@ func askAPI(ctx context.Context, provider, key, text string) (string, error) {
 				Content []struct {
 					Text string `json:"text"`
 				} `json:"content"`
+				Usage struct {
+					In  int64 `json:"input_tokens"`
+					Out int64 `json:"output_tokens"`
+				} `json:"usage"`
 			}
 			if err := d.Decode(&r); err != nil || len(r.Content) == 0 {
 				return "", fmt.Errorf("claude: bad response: %v", err)
 			}
+			u = callUsage{in: r.Usage.In, out: r.Usage.Out}
 			return r.Content[0].Text, nil
 		}
 	case "gemini":
@@ -220,25 +290,31 @@ func askAPI(ctx context.Context, provider, key, text string) (string, error) {
 						} `json:"parts"`
 					} `json:"content"`
 				} `json:"candidates"`
+				Usage struct {
+					In  int64 `json:"promptTokenCount"`
+					Out int64 `json:"candidatesTokenCount"`
+				} `json:"usageMetadata"`
 			}
 			if err := d.Decode(&r); err != nil || len(r.Candidates) == 0 || len(r.Candidates[0].Content.Parts) == 0 {
 				return "", fmt.Errorf("gemini: bad response: %v", err)
 			}
+			u = callUsage{in: r.Usage.In, out: r.Usage.Out}
 			return r.Candidates[0].Content.Parts[0].Text, nil
 		}
 	}
 	if err != nil {
-		return "", err
+		return "", callUsage{}, err
 	}
 	resp, err := answerHTTP.Do(req)
 	if err != nil {
-		return "", err
+		return "", callUsage{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s: %s", provider, resp.Status)
+		return "", callUsage{}, fmt.Errorf("%s: %s", provider, resp.Status)
 	}
-	return parse(json.NewDecoder(resp.Body))
+	reply, err := parse(json.NewDecoder(resp.Body))
+	return reply, u, err
 }
 
 func jsonReq(ctx context.Context, url string, body any) (*http.Request, error) {

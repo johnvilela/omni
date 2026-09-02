@@ -120,15 +120,17 @@ func (s *Server) agentAnswer(ctx context.Context, sess Session, text string) str
 		return "⚠ " + err.Error()
 	}
 	var reply, vendorID string
+	var u callUsage
 	switch sess.Provider {
 	case "openai":
-		reply, vendorID, err = runCodexAgent(ctx, sess.VendorSessionID, text)
+		reply, vendorID, u, err = runCodexAgent(ctx, sess.VendorSessionID, text)
 	default:
-		reply, vendorID, err = runClaudeAgent(ctx, sess.VendorSessionID, text)
+		reply, vendorID, u, err = runClaudeAgent(ctx, sess.VendorSessionID, text)
 	}
 	if err != nil {
 		return "⚠ " + err.Error()
 	}
+	s.recordUsage(sess.Provider, u)
 	// claude forks a new session id every resumed turn — a missed write here
 	// orphans the vendor session, so failures surface instead of hiding
 	if vendorID != "" && vendorID != sess.VendorSessionID {
@@ -148,38 +150,87 @@ func (s *Server) agentAnswer(ctx context.Context, sess Session, text string) str
 	return strings.TrimSpace(reply)
 }
 
+// claudeResult is claude's -p --output-format json result shape.
+type claudeResult struct {
+	Result    string  `json:"result"`
+	SessionID string  `json:"session_id"`
+	IsError   bool    `json:"is_error"`
+	TotalCost float64 `json:"total_cost_usd"`
+	Usage     struct {
+		In         int64 `json:"input_tokens"`
+		Out        int64 `json:"output_tokens"`
+		CacheWrite int64 `json:"cache_creation_input_tokens"`
+		CacheRead  int64 `json:"cache_read_input_tokens"`
+	} `json:"usage"`
+}
+
+func (r claudeResult) usage() callUsage {
+	return callUsage{in: r.Usage.In + r.Usage.CacheWrite + r.Usage.CacheRead, out: r.Usage.Out, cost: r.TotalCost}
+}
+
+// parseClaudeJSON decodes a claude json result, mapping is_error to an error.
+func parseClaudeJSON(out string) (claudeResult, error) {
+	var res claudeResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		return res, fmt.Errorf("claude: bad json output: %v", err)
+	}
+	if res.IsError {
+		return res, fmt.Errorf("claude: %s", res.Result)
+	}
+	return res, nil
+}
+
+// parseCodexEvents scans a codex --json JSONL stream for the thread id
+// ({"type":"thread.started"}) and token usage ({"type":"turn.completed"}).
+func parseCodexEvents(out string) (threadID string, u callUsage) {
+	for _, line := range strings.Split(out, "\n") {
+		var ev struct {
+			Type     string `json:"type"`
+			ThreadID string `json:"thread_id"`
+			Usage    struct {
+				In  int64 `json:"input_tokens"`
+				Out int64 `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		switch ev.Type {
+		case "thread.started":
+			threadID = ev.ThreadID
+		case "turn.completed":
+			u.in += ev.Usage.In
+			u.out += ev.Usage.Out
+		}
+	}
+	return threadID, u
+}
+
 // runClaudeAgent runs one un-bare claude turn in the workspace; the json
-// output carries both the reply and the session id to resume next turn.
-func runClaudeAgent(ctx context.Context, vendorID, text string) (reply, newVendorID string, err error) {
+// output carries the reply, usage and the session id to resume next turn.
+func runClaudeAgent(ctx context.Context, vendorID, text string) (reply, newVendorID string, u callUsage, err error) {
 	args := []string{"-p", text, "--output-format", "json", "--dangerously-skip-permissions"}
 	if vendorID != "" {
 		args = append(args, "--resume", vendorID)
 	}
 	out, err := runCLI(ctx, agentDir(), agentTimeout, "claude", args...)
 	if err != nil {
-		return "", "", err
+		return "", "", callUsage{}, err
 	}
-	var res struct {
-		Result    string `json:"result"`
-		SessionID string `json:"session_id"`
-		IsError   bool   `json:"is_error"`
+	res, err := parseClaudeJSON(out)
+	if err != nil {
+		return "", "", callUsage{}, err
 	}
-	if err := json.Unmarshal([]byte(out), &res); err != nil {
-		return "", "", fmt.Errorf("claude: bad json output: %v", err)
-	}
-	if res.IsError {
-		return "", "", fmt.Errorf("claude: %s", res.Result)
-	}
-	return res.Result, res.SessionID, nil
+	return res.Result, res.SessionID, res.usage(), nil
 }
 
 // runCodexAgent runs one un-bare codex turn in the workspace: the final
-// message lands in a temp file via -o, the session id comes from the --json
-// event stream ({"type":"thread.started","thread_id":"…"}).
-func runCodexAgent(ctx context.Context, vendorID, text string) (reply, newVendorID string, err error) {
+// message lands in a temp file via -o, the session id and usage come from the
+// --json event stream.
+func runCodexAgent(ctx context.Context, vendorID, text string) (reply, newVendorID string, u callUsage, err error) {
 	tmp, err := os.CreateTemp("", "omni-agent-*")
 	if err != nil {
-		return "", "", err
+		return "", "", callUsage{}, err
 	}
 	tmp.Close()
 	defer os.Remove(tmp.Name())
@@ -192,21 +243,12 @@ func runCodexAgent(ctx context.Context, vendorID, text string) (reply, newVendor
 		"--json", "-o", tmp.Name(), text)
 	out, err := runCLI(ctx, agentDir(), agentTimeout, "codex", args...)
 	if err != nil {
-		return "", "", err
+		return "", "", callUsage{}, err
 	}
-	for _, line := range strings.Split(out, "\n") {
-		var ev struct {
-			Type     string `json:"type"`
-			ThreadID string `json:"thread_id"`
-		}
-		if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == "thread.started" {
-			newVendorID = ev.ThreadID
-			break
-		}
-	}
+	newVendorID, u = parseCodexEvents(out)
 	raw, err := os.ReadFile(tmp.Name())
 	if err != nil {
-		return "", "", err
+		return "", "", callUsage{}, err
 	}
-	return string(raw), newVendorID, nil
+	return string(raw), newVendorID, u, nil
 }

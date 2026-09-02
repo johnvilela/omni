@@ -47,7 +47,7 @@ func newLLMTestServer(t *testing.T) (*Server, *Store) {
 			w.WriteHeader(401)
 			return
 		}
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"pong"}}]}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"pong"}}],"usage":{"prompt_tokens":7,"completion_tokens":3}}`)
 	})
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("x-api-key") != "GOOD" {

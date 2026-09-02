@@ -267,6 +267,30 @@ func TestStoreMessages(t *testing.T) {
 	}
 }
 
+func TestStoreUsage(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	s.AddUsage("claude", 100, 20, 0.5, 1000)
+	s.AddUsage("claude", 200, 30, 0, 2000)
+	s.AddUsage("openai", 999, 999, 9, 2000) // other provider, not counted
+
+	u, err := s.UsageSince("claude", 1500)
+	if err != nil || u.Requests != 1 || u.In != 200 || u.Out != 30 || u.Cost != 0 {
+		t.Fatalf("UsageSince(1500) = %+v, %v; want the newer row only", u, err)
+	}
+	u, _ = s.UsageSince("claude", 0)
+	if u.Requests != 2 || u.In != 300 || u.Out != 50 || u.Cost != 0.5 {
+		t.Fatalf("UsageSince(0) = %+v; want both rows summed", u)
+	}
+	if u, _ = s.UsageSince("gemini", 0); u.Requests != 0 {
+		t.Fatalf("UsageSince(gemini) = %+v; want zero", u)
+	}
+}
+
 func TestStoreConnected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "omni.db")
 	s, err := OpenStore(path)

@@ -62,6 +62,16 @@ func OpenStore(path string) (*Store, error) {
 			content TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
+		// one row per llm call omni made; cost only when the provider
+		// reported one (claude CLI does, api responses don't)
+		`CREATE TABLE IF NOT EXISTS usage (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			cost REAL NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL
+		)`,
 	} {
 		if _, err := db.Exec(ddl); err != nil {
 			db.Close()
@@ -276,6 +286,27 @@ func (s *Store) Messages(sessionID string) ([]Message, error) {
 		ms = append(ms, m)
 	}
 	return ms, rows.Err()
+}
+
+// Usage is one provider's aggregated llm consumption.
+type Usage struct {
+	Requests, In, Out int64
+	Cost              float64
+}
+
+func (s *Store) AddUsage(provider string, in, out int64, cost float64, at int64) error {
+	_, err := s.db.Exec(`INSERT INTO usage (provider, input_tokens, output_tokens, cost, created_at)
+		VALUES (?, ?, ?, ?, ?)`, provider, in, out, cost, at)
+	return err
+}
+
+func (s *Store) UsageSince(provider string, since int64) (Usage, error) {
+	var u Usage
+	err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cost), 0)
+		FROM usage WHERE provider = ? AND created_at >= ?`, provider, since).
+		Scan(&u.Requests, &u.In, &u.Out, &u.Cost)
+	return u, err
 }
 
 func (s *Store) SetConnected(name string, v bool) error {

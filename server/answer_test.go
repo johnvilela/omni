@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func TestAnswerAPIKey(t *testing.T) {
 func TestAnswerClaudeCode(t *testing.T) {
 	srv, _ := newLLMTestServer(t)
 	bin := t.TempDir()
-	script := "#!/bin/sh\necho pong\n"
+	script := "#!/bin/sh\necho '{\"result\":\"pong\",\"session_id\":\"s\"}'\n"
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -71,19 +72,55 @@ func TestAnswerClaudeCode(t *testing.T) {
 	}
 }
 
-// TestAnswerCLIBare locks the security contract of every vendor CLI call:
-// no MCP servers, no user config/settings, tools disabled or read-only. The
-// host's agent setup must never leak into chat answers.
+// chatFakeScript returns a fake vendor CLI that records its args and answers
+// pong the way the real one does: claude as a json result, codex as JSONL
+// events plus the final message in the -o file, gemini as plain text.
+func chatFakeScript(bin, argsFile string) string {
+	switch bin {
+	case "claude":
+		return "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\necho '{\"result\":\"pong\",\"session_id\":\"s\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}'\n"
+	case "codex":
+		return "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + `
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && out="$a"
+  prev="$a"
+done
+[ -n "$out" ] && echo pong > "$out"
+echo '{"type":"thread.started","thread_id":"t"}'
+echo '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}'
+`
+	}
+	return "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\necho pong\n"
+}
+
+// dropOPair removes "-o <path>" (the unpredictable temp file) from recorded
+// args before comparison.
+func dropOPair(t *testing.T, args []string) []string {
+	t.Helper()
+	i := slices.Index(args, "-o")
+	if i < 0 {
+		t.Fatalf("args %q missing -o last-message file", args)
+	}
+	return slices.Delete(args, i, i+2)
+}
+
+// TestAnswerCLIBare locks the security contract of every vendor CLI chat
+// call: no MCP servers, no user config/settings, tools disabled or
+// read-only. The host's agent setup must never leak into chat answers.
+// claude/codex additionally carry structured-output flags so usage can be
+// recorded — those do not loosen the bare contract.
 func TestAnswerCLIBare(t *testing.T) {
 	cases := []struct {
 		provider, rel, creds, bin string
+		dropO                     bool
 		want                      []string
 	}{
-		{"openai", filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`, "codex",
-			[]string{"exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only", "ping"}},
-		{"claude", filepath.Join(".claude", ".credentials.json"), `{"claudeAiOauth":{"accessToken":"tok"}}`, "claude",
-			[]string{"-p", "ping", "--tools", "", "--strict-mcp-config", "--setting-sources", ""}},
-		{"gemini", filepath.Join(".gemini", "oauth_creds.json"), `{"access_token":"tok"}`, "gemini",
+		{"openai", filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`, "codex", true,
+			[]string{"exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only", "--json", "ping"}},
+		{"claude", filepath.Join(".claude", ".credentials.json"), `{"claudeAiOauth":{"accessToken":"tok"}}`, "claude", false,
+			[]string{"-p", "ping", "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--output-format", "json"}},
+		{"gemini", filepath.Join(".gemini", "oauth_creds.json"), `{"access_token":"tok"}`, "gemini", false,
 			[]string{"--allowed-mcp-server-names", "omni-none", "-e", "none", "-p", "ping"}},
 	}
 	for _, c := range cases {
@@ -92,8 +129,7 @@ func TestAnswerCLIBare(t *testing.T) {
 			writeCreds(t, c.rel, c.creds)
 			bin := t.TempDir()
 			argsFile := filepath.Join(bin, "args.txt")
-			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\necho pong\n"
-			if err := os.WriteFile(filepath.Join(bin, c.bin), []byte(script), 0o755); err != nil {
+			if err := os.WriteFile(filepath.Join(bin, c.bin), []byte(chatFakeScript(c.bin, argsFile)), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin)
@@ -103,12 +139,12 @@ func TestAnswerCLIBare(t *testing.T) {
 			if got, err := srv.Answer(context.Background(), "ping"); err != nil || got != "pong" {
 				t.Fatalf("Answer = %q, %v; want pong", got, err)
 			}
-			raw, err := os.ReadFile(argsFile)
-			if err != nil {
-				t.Fatal(err)
+			got := readLines(t, argsFile)
+			if c.dropO {
+				got = dropOPair(t, got)
 			}
-			if string(raw) != strings.Join(c.want, "\n")+"\n" {
-				t.Fatalf("cli args = %q; want %q", raw, c.want)
+			if !slices.Equal(got, c.want) {
+				t.Fatalf("cli args = %q; want %q", got, c.want)
 			}
 		})
 	}
@@ -130,13 +166,14 @@ func writeTestConfig(t *testing.T, content string) {
 func TestAnswerConfiguredModelCLI(t *testing.T) {
 	cases := []struct {
 		provider, rel, creds, bin string
+		dropO                     bool
 		want                      []string
 	}{
-		{"openai", filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`, "codex",
-			[]string{"exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only", "-m", "m-test", "ping"}},
-		{"claude", filepath.Join(".claude", ".credentials.json"), `{"claudeAiOauth":{"accessToken":"tok"}}`, "claude",
-			[]string{"-p", "ping", "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--model", "m-test"}},
-		{"gemini", filepath.Join(".gemini", "oauth_creds.json"), `{"access_token":"tok"}`, "gemini",
+		{"openai", filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`, "codex", true,
+			[]string{"exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only", "-m", "m-test", "--json", "ping"}},
+		{"claude", filepath.Join(".claude", ".credentials.json"), `{"claudeAiOauth":{"accessToken":"tok"}}`, "claude", false,
+			[]string{"-p", "ping", "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--model", "m-test", "--output-format", "json"}},
+		{"gemini", filepath.Join(".gemini", "oauth_creds.json"), `{"access_token":"tok"}`, "gemini", false,
 			[]string{"--allowed-mcp-server-names", "omni-none", "-e", "none", "-m", "m-test", "-p", "ping"}},
 	}
 	for _, c := range cases {
@@ -146,8 +183,7 @@ func TestAnswerConfiguredModelCLI(t *testing.T) {
 			writeTestConfig(t, c.provider+"_model: m-test\n")
 			bin := t.TempDir()
 			argsFile := filepath.Join(bin, "args.txt")
-			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\necho pong\n"
-			if err := os.WriteFile(filepath.Join(bin, c.bin), []byte(script), 0o755); err != nil {
+			if err := os.WriteFile(filepath.Join(bin, c.bin), []byte(chatFakeScript(c.bin, argsFile)), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin)
@@ -157,14 +193,31 @@ func TestAnswerConfiguredModelCLI(t *testing.T) {
 			if got, err := srv.Answer(context.Background(), "ping"); err != nil || got != "pong" {
 				t.Fatalf("Answer = %q, %v; want pong", got, err)
 			}
-			raw, err := os.ReadFile(argsFile)
-			if err != nil {
-				t.Fatal(err)
+			got := readLines(t, argsFile)
+			if c.dropO {
+				got = dropOPair(t, got)
 			}
-			if string(raw) != strings.Join(c.want, "\n")+"\n" {
-				t.Fatalf("cli args = %q; want %q", raw, c.want)
+			if !slices.Equal(got, c.want) {
+				t.Fatalf("cli args = %q; want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestAnswerRecordsUsage: every answered call logs its reported token usage
+// for /usage — api_key path here, CLI paths covered by the bare tests' fakes.
+func TestAnswerRecordsUsage(t *testing.T) {
+	srv, store := newLLMTestServer(t)
+	t.Setenv("OPENAI_API_KEY", "GOOD")
+	if _, code, err := srv.ConnectLLM(context.Background(), "openai", ""); code != 200 {
+		t.Fatalf("connect = %d, %v", code, err)
+	}
+	if _, err := srv.Answer(context.Background(), "ping"); err != nil {
+		t.Fatal(err)
+	}
+	u, err := store.UsageSince("openai", 0)
+	if err != nil || u.Requests != 1 || u.In != 7 || u.Out != 3 {
+		t.Fatalf("UsageSince = %+v, %v; want the fake's 7 in / 3 out", u, err)
 	}
 }
 
