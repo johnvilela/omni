@@ -150,7 +150,7 @@ func TestTelegramRegisterCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmds, _ := (<-got)["commands"].([]any)
-	want := []string{"new", "agent", "sessions", "usage", "context", "crons"}
+	want := []string{"new", "agent", "sessions", "usage", "context", "crons", "pin"}
 	if len(cmds) != len(want) {
 		t.Fatalf("registered %d commands; want %d", len(cmds), len(want))
 	}
@@ -159,6 +159,23 @@ func TestTelegramRegisterCommands(t *testing.T) {
 		if m["command"] != want[i] || m["description"] == "" {
 			t.Fatalf("command %d = %v; want /%s with a description", i, m, want[i])
 		}
+	}
+}
+
+// TestTelegramSendReturningID: the plain send discards the message id; this
+// variant must surface it (the pin dashboard edits the message later).
+func TestTelegramSendReturningID(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/botTOKEN/sendMessage", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"ok":true,"result":{"message_id":123}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tg := NewTelegram(srv.URL, "TOKEN")
+	id, err := tg.sendReturningID(context.Background(), 42, "hi")
+	if err != nil || id != 123 {
+		t.Fatalf("sendReturningID = %d, %v; want 123, nil", id, err)
 	}
 }
 

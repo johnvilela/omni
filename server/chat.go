@@ -162,6 +162,7 @@ func (s *Server) ensureSession() (Session, error) {
 	if err := s.store.SetActiveSession(id); err != nil {
 		return Session{}, err
 	}
+	go s.refreshPin()
 	return Session{ID: id}, nil
 }
 
@@ -237,5 +238,6 @@ func (s *Server) nameSession(id, firstMsg string) {
 	}
 	if title != "" {
 		s.store.SetSessionName(id, title) // best-effort
+		s.refreshPin()                    // dashboard headline shows the new name
 	}
 }

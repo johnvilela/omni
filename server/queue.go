@@ -31,6 +31,7 @@ func (s *Server) enqueue(sessID, text string) {
 	q.pending = append(q.pending, text)
 	if !running {
 		go s.drain(sessID)
+		go s.refreshPin()
 	}
 }
 
@@ -72,6 +73,7 @@ func (s *Server) drain(sessID string) {
 		if len(q.pending) == 0 {
 			delete(s.queues, sessID)
 			s.qmu.Unlock()
+			go s.refreshPin()
 			return
 		}
 		text := q.pending[0]
@@ -120,6 +122,7 @@ func (s *Server) runTask(ctx context.Context, sessID, text string) {
 	if err := s.store.AppendSessionUnread(sessID, "\n\n"+answer); err != nil {
 		log.Printf("task: %v", err)
 	}
+	go s.refreshPin()
 	s.notifyOwner(context.Background(), tgReply{
 		Text:     "✅ " + sessionLabel(sess) + " finished",
 		Keyboard: [][]button{{{Text: "▶ resume", CallbackData: sessID}}},
@@ -167,4 +170,11 @@ func (s *Server) running(sessID string) bool {
 	defer s.qmu.Unlock()
 	_, ok := s.queues[sessID]
 	return ok
+}
+
+// runningCount is the number of sessions with background work.
+func (s *Server) runningCount() int {
+	s.qmu.Lock()
+	defer s.qmu.Unlock()
+	return len(s.queues)
 }

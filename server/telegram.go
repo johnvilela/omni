@@ -119,7 +119,34 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 		{"command": "usage", "description": "llm usage per provider — tokens, cost, limits"},
 		{"command": "context", "description": "context usage of the active session — tokens per source"},
 		{"command": "crons", "description": "list scheduled jobs — tap to delete"},
+		{"command": "pin", "description": "toggle pinned status dashboard — /pin [full|clean]"},
 	}}, nil)
+}
+
+// sendReturningID sends one plain message and returns its message id (the
+// chunking send discards it; the pin dashboard needs it to edit later).
+func (t *Telegram) sendReturningID(ctx context.Context, chatID int64, text string) (int64, error) {
+	var res struct {
+		MessageID int64 `json:"message_id"`
+	}
+	err := t.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text}, &res)
+	return res.MessageID, err
+}
+
+func (t *Telegram) editMessage(ctx context.Context, chatID, msgID int64, text string) error {
+	return t.call(ctx, "editMessageText", map[string]any{"chat_id": chatID, "message_id": msgID, "text": text}, nil)
+}
+
+func (t *Telegram) pinMessage(ctx context.Context, chatID, msgID int64) error {
+	return t.call(ctx, "pinChatMessage", map[string]any{"chat_id": chatID, "message_id": msgID, "disable_notification": true}, nil)
+}
+
+func (t *Telegram) unpinMessage(ctx context.Context, chatID, msgID int64) error {
+	return t.call(ctx, "unpinChatMessage", map[string]any{"chat_id": chatID, "message_id": msgID}, nil)
+}
+
+func (t *Telegram) deleteMessage(ctx context.Context, chatID, msgID int64) error {
+	return t.call(ctx, "deleteMessage", map[string]any{"chat_id": chatID, "message_id": msgID}, nil)
 }
 
 // typing keeps the "typing…" indicator alive while an answer is produced;

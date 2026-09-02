@@ -56,6 +56,8 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		return s.showContext()
 	case "/crons":
 		return s.listCrons()
+	case "/pin":
+		return s.handlePin(ctx, arg)
 	}
 	if pick, rest, ok := cutAtProvider(text); ok {
 		return s.atProvider(pick, rest)
@@ -113,6 +115,7 @@ func (s *Server) newSession(agent bool, provider string) (Session, error) {
 	if err := s.store.SetActiveSession(id); err != nil {
 		return Session{}, err
 	}
+	go s.refreshPin()
 	return Session{ID: id, Agent: agent, Provider: provider}, nil
 }
 
@@ -141,19 +144,7 @@ func (s *Server) listSessions() tgReply {
 	}
 	var kb [][]button
 	for _, r := range rs {
-		label := r.Name
-		if label == "" {
-			label = r.FirstMsg
-		}
-		if label == "" {
-			label = "(empty)"
-		}
-		if runes := []rune(label); len(runes) > 40 {
-			label = string(runes[:40]) + "…"
-		}
-		if r.Agent {
-			label = "🤖 " + label
-		}
+		label := recentLabel(r)
 		if r.Unread != "" {
 			label = "✉ " + label
 		}
@@ -163,6 +154,25 @@ func (s *Server) listSessions() tgReply {
 		kb = append(kb, []button{{Text: label, CallbackData: r.ID}})
 	}
 	return tgReply{Text: "sessions — tap to resume:", Keyboard: kb}
+}
+
+// recentLabel is a listing row's display name: llm-given title, else the
+// first message, truncated; 🤖 marks agent sessions.
+func recentLabel(r RecentSession) string {
+	label := r.Name
+	if label == "" {
+		label = r.FirstMsg
+	}
+	if label == "" {
+		label = "(empty)"
+	}
+	if runes := []rune(label); len(runes) > 40 {
+		label = string(runes[:40]) + "…"
+	}
+	if r.Agent {
+		label = "🤖 " + label
+	}
+	return label
 }
 
 // listCrons renders the scheduled jobs with a delete button per job.
@@ -221,6 +231,7 @@ func (s *Server) resumeSession(id string) tgReply {
 		s.store.ClearSessionUnread(sess.ID) // best-effort
 		reply += "\n\n" + u
 	}
+	go s.refreshPin()
 	return tgReply{Text: reply}
 }
 

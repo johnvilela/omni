@@ -74,6 +74,12 @@ func OpenStore(path string) (*Store, error) {
 			text TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
+		// pinned status-dashboard message per owner chat (see server/pin.go)
+		`CREATE TABLE IF NOT EXISTS pins (
+			chat_id INTEGER PRIMARY KEY,
+			message_id INTEGER NOT NULL,
+			mode TEXT NOT NULL DEFAULT 'clean'
+		)`,
 		// one row per llm call omni made; cost only when the provider
 		// reported one (claude CLI does, api responses don't)
 		`CREATE TABLE IF NOT EXISTS usage (
@@ -281,6 +287,53 @@ func (s *Store) AppendSessionUnread(id, text string) error {
 
 func (s *Store) ClearSessionUnread(id string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET unread = '' WHERE id = ?`, id)
+	return err
+}
+
+// UnreadCount is the number of sessions holding an undelivered answer.
+func (s *Store) UnreadCount() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE unread != ''`).Scan(&n)
+	return n, err
+}
+
+// Pin is one pinned dashboard message: which chat, which message, clean|full.
+type Pin struct {
+	ChatID, MessageID int64
+	Mode              string
+}
+
+func (s *Store) Pins() ([]Pin, error) {
+	rows, err := s.db.Query(`SELECT chat_id, message_id, mode FROM pins`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ps []Pin
+	for rows.Next() {
+		var p Pin
+		if err := rows.Scan(&p.ChatID, &p.MessageID, &p.Mode); err != nil {
+			return nil, err
+		}
+		ps = append(ps, p)
+	}
+	return ps, rows.Err()
+}
+
+func (s *Store) SetPin(chatID, messageID int64, mode string) error {
+	_, err := s.db.Exec(`INSERT INTO pins (chat_id, message_id, mode) VALUES (?, ?, ?)
+		ON CONFLICT(chat_id) DO UPDATE SET message_id = excluded.message_id, mode = excluded.mode`,
+		chatID, messageID, mode)
+	return err
+}
+
+func (s *Store) DeletePins() error {
+	_, err := s.db.Exec(`DELETE FROM pins`)
+	return err
+}
+
+func (s *Store) SetPinMode(mode string) error {
+	_, err := s.db.Exec(`UPDATE pins SET mode = ?`, mode)
 	return err
 }
 

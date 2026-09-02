@@ -33,6 +33,9 @@ type Server struct {
 
 	qmu    sync.Mutex
 	queues map[string]*sessionQueue // sessionID → background work; key present = drainer alive
+
+	pinMu   sync.Mutex
+	pinLast map[int64]string // chatID → last rendered dashboard text (edit dedupe)
 }
 
 func NewServer(store *Store, telegramAPIBase string) *Server {
@@ -74,6 +77,7 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 	s.tg = tg
 	s.mu.Unlock()
 	go tg.Poll(pollCtx)
+	go s.refreshPin() // re-attach a persisted dashboard after restart/reconnect
 
 	if err := s.store.SetConnected("telegram", true); err != nil {
 		return channelStatus{}, http.StatusInternalServerError, err
