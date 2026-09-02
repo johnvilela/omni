@@ -150,6 +150,22 @@ func TestStoreActivePointer(t *testing.T) {
 	}
 }
 
+func TestStoreSetSessionProvider(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	s.AddSession("a", false, "")
+	if err := s.SetSessionProvider("a", "openai"); err != nil {
+		t.Fatalf("SetSessionProvider: %v", err)
+	}
+	if sess, _, _ := s.Session("a"); sess.Provider != "openai" {
+		t.Fatalf("Session = %+v; want provider openai", sess)
+	}
+}
+
 func TestStoreRecentSessions(t *testing.T) {
 	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
 	if err != nil {

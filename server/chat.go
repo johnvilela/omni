@@ -117,7 +117,7 @@ func (s *Server) ChatAnswer(ctx context.Context, text string) (string, error) {
 		memory = readMemory(wiki)
 	}
 	prompt, dropped := composePrompt(memory, history, text, tokenBudget())
-	reply, err := s.Answer(ctx, prompt)
+	reply, err := s.answerWith(ctx, sess.Provider, prompt)
 	if err != nil {
 		return "", err
 	}

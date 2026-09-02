@@ -219,6 +219,36 @@ func TestRunCLIErrorConcise(t *testing.T) {
 	}
 }
 
+// TestAnswerWithProvider: an explicit provider wins over the default; an
+// explicit but disconnected provider errors with the connect hint.
+func TestAnswerWithProvider(t *testing.T) {
+	srv, _ := newLLMTestServer(t)
+	t.Setenv("OPENAI_API_KEY", "GOOD")
+	t.Setenv("ANTHROPIC_API_KEY", "GOOD")
+	for _, p := range []string{"openai", "claude"} {
+		if _, code, err := srv.ConnectLLM(context.Background(), p, ""); code != 200 {
+			t.Fatalf("connect %s = %d, %v", p, code, err)
+		}
+	}
+	writeTestConfig(t, "default_llm: claude\n")
+	// distinct reply proves the openai endpoint was the one hit
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"openai-pong"}}]}`)
+	}))
+	t.Cleanup(fake.Close)
+	t.Setenv("OMNI_OPENAI_API", fake.URL)
+
+	if got, err := srv.answerWith(context.Background(), "openai", "ping"); err != nil || got != "openai-pong" {
+		t.Fatalf("answerWith(openai) = %q, %v; want openai-pong", got, err)
+	}
+	if got, err := srv.Answer(context.Background(), "ping"); err != nil || got != "pong" {
+		t.Fatalf("Answer (default claude) = %q, %v; want pong", got, err)
+	}
+	if _, err := srv.answerWith(context.Background(), "gemini", "ping"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("answerWith(disconnected) = %v; want not connected", err)
+	}
+}
+
 func TestAnswerNotice(t *testing.T) {
 	srv, _ := newLLMTestServer(t)
 	got := srv.answerNotice(context.Background(), "hi")

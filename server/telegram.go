@@ -114,7 +114,7 @@ func (t *Telegram) GetMe(ctx context.Context) (string, error) {
 func (t *Telegram) registerCommands(ctx context.Context) error {
 	return t.call(ctx, "setMyCommands", map[string]any{"commands": []map[string]string{
 		{"command": "new", "description": "start a fresh chat session"},
-		{"command": "agent", "description": "start an agent session (tools + browser)"},
+		{"command": "agent", "description": "agent session with tools — /agent [@openai|@claude] task"},
 		{"command": "sessions", "description": "list recent sessions — tap to resume"},
 	}}, nil)
 }

@@ -34,9 +34,15 @@ func configuredModel(provider string) string {
 // no history. The chat flow, session naming and the memory digest all build
 // on it; ChatAnswer is the history-aware entry point.
 func (s *Server) Answer(ctx context.Context, text string) (string, error) {
+	return s.answerWith(ctx, "", text)
+}
+
+// answerWith is Answer with a provider override; "" means the default llm
+// (chat sessions pinned via a sticky @pick pass their own).
+func (s *Server) answerWith(ctx context.Context, provider, text string) (string, error) {
 	var def *llmStatus
 	for _, ls := range s.llmStatuses() {
-		if ls.Default {
+		if (provider == "" && ls.Default) || ls.Name == provider {
 			def = &ls
 			break
 		}

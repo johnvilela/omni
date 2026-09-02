@@ -202,6 +202,13 @@ func (s *Store) SetActiveSession(id string) error {
 	return err
 }
 
+// SetSessionProvider pins a chat session to one provider (the sticky @pick);
+// "" means the default llm.
+func (s *Store) SetSessionProvider(id, provider string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET provider = ? WHERE id = ?`, provider, id)
+	return err
+}
+
 func (s *Store) SetVendorSessionID(id, vendorID string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET vendor_session_id = ? WHERE id = ?`, vendorID, id)
 	return err
