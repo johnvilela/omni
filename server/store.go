@@ -97,6 +97,14 @@ func OpenStore(path string) (*Store, error) {
 			cost REAL NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL
 		)`,
+		// chat replies whose TOOL lines await owner approval (approval gate);
+		// a row lives from proposal until approve / deny / supersede
+		`CREATE TABLE IF NOT EXISTS proposals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			reply TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
 	} {
 		if _, err := db.Exec(ddl); err != nil {
 			db.Close()
@@ -418,6 +426,50 @@ func (s *Store) QueuedMessages() ([]QueuedMessage, error) {
 		qs = append(qs, q)
 	}
 	return qs, rows.Err()
+}
+
+// Proposal is one pending tool approval: the raw llm reply whose TOOL lines
+// run only when the owner approves.
+type Proposal struct {
+	ID               int64
+	SessionID, Reply string
+}
+
+func (s *Store) AddProposal(sessionID, reply string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO proposals (session_id, reply, created_at)
+		VALUES (?, ?, ?) RETURNING id`, sessionID, reply, time.Now().Unix()).Scan(&id)
+	return id, err
+}
+
+// Proposal looks one pending proposal up by id; false means it was resolved
+// (or never existed).
+func (s *Store) Proposal(id int64) (Proposal, bool, error) {
+	p := Proposal{ID: id}
+	err := s.db.QueryRow(`SELECT session_id, reply FROM proposals WHERE id = ?`, id).
+		Scan(&p.SessionID, &p.Reply)
+	if err == sql.ErrNoRows {
+		return Proposal{}, false, nil
+	}
+	if err != nil {
+		return Proposal{}, false, err
+	}
+	return p, true, nil
+}
+
+func (s *Store) DeleteProposal(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM proposals WHERE id = ?`, id)
+	return err
+}
+
+// DeleteSessionProposals removes every pending proposal for one session,
+// returning how many there were (supersede-on-new-message).
+func (s *Store) DeleteSessionProposals(sessionID string) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM proposals WHERE session_id = ?`, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // Cron is one scheduled job.

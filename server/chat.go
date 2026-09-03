@@ -181,6 +181,12 @@ func (s *Server) ChatAnswer(ctx context.Context, text string) (string, error) {
 // they were enqueued for, so a queued message never lands in whatever session
 // became active meanwhile.
 func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (string, error) {
+	// a new message supersedes any pending proposal in this session (the ✏
+	// edit flow is just this: the button only tells the owner to type)
+	if n, err := s.store.DeleteSessionProposals(sess.ID); err == nil && n > 0 {
+		s.store.AddMessage(sess.ID, "user",
+			"🚫 pending proposal cancelled — those actions were NOT run", time.Now().Unix())
+	}
 	history, err := s.store.Messages(sess.ID)
 	if err != nil {
 		return "", err
@@ -202,6 +208,13 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 	if err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(reply) == "" {
+		reply = "(empty reply)" // telegram rejects empty text; history stays truthful
+	}
+	// "" from here on means "proposal delivered out-of-band, send nothing"
+	if len(gatedNames(reply)) > 0 {
+		return "", s.proposeTools(ctx, sess, reply)
+	}
 	readRan := strings.Contains(reply, "TOOL:read_file")
 	reply = s.applyTools(ctx, reply) // history keeps confirmations, not TOOL lines
 	visible := reply
@@ -212,6 +225,12 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 		followup := prompt + "\n\nassistant: " + reply +
 			"\n\nThe 📄 lines above are the file contents you asked for. Answer the user's message now using them; do not emit TOOL:read_file again."
 		if more, err := s.answerWith(ctx, sess.Provider, followup); err == nil && strings.TrimSpace(more) != "" {
+			if len(gatedNames(more)) > 0 {
+				// round 1 ran (📄 dumps); persist it, then gate round 2 — file
+				// contents are untrusted input, this round must not skip the gate
+				s.store.AddMessage(sess.ID, "assistant", reply, time.Now().Unix())
+				return "", s.proposeTools(ctx, sess, more)
+			}
 			visible = s.applyTools(ctx, more)
 			reply += "\n\n" + visible
 		}

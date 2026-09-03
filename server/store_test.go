@@ -338,6 +338,41 @@ func TestStoreUsage(t *testing.T) {
 	}
 }
 
+func TestProposalRows(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	id, err := s.AddProposal("a", "TOOL:cron_add {}")
+	if err != nil || id != 1 {
+		t.Fatalf("AddProposal = %d, %v", id, err)
+	}
+	s.AddProposal("a", "TOOL:write_file {}")
+	s.AddProposal("b", "TOOL:edit_file {}")
+
+	p, ok, err := s.Proposal(1)
+	if err != nil || !ok || p != (Proposal{ID: 1, SessionID: "a", Reply: "TOOL:cron_add {}"}) {
+		t.Fatalf("Proposal(1) = %+v, %v, %v", p, ok, err)
+	}
+	if _, ok, err := s.Proposal(99); err != nil || ok {
+		t.Fatalf("Proposal(unknown) = ok %v, %v; want false", ok, err)
+	}
+	if err := s.DeleteProposal(1); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Proposal(1); ok {
+		t.Fatal("Proposal(1) survives delete")
+	}
+	if n, err := s.DeleteSessionProposals("a"); err != nil || n != 1 {
+		t.Fatalf("DeleteSessionProposals(a) = %d, %v; want the remaining row", n, err)
+	}
+	if _, ok, _ := s.Proposal(3); !ok {
+		t.Fatal("session b's proposal must survive session a's supersede")
+	}
+}
+
 func TestStoreConnected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "omni.db")
 	s, err := OpenStore(path)

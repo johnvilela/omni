@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,6 +96,14 @@ func TestCronPrompt(t *testing.T) {
 // stored/sent reply is the confirmation; the next prompt carries the job.
 func TestChatAnswerToolRound(t *testing.T) {
 	srv, store, rec := newChatTestServer(t)
+	// this test covers the executor round; the approval gate has its own tests
+	dir, _ := os.UserConfigDir()
+	if err := os.MkdirAll(filepath.Join(dir, app), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"), []byte("approvals: off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	rec.reply = `TOOL:cron_add {"schedule":"0 8 * * *","kind":"message","text":"drink water"}`
 	got, err := srv.ChatAnswer(context.Background(), "remind me to drink water every day at 8am")
 	if err != nil || !strings.Contains(got, "#1") || strings.Contains(got, "TOOL:") {

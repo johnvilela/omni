@@ -154,7 +154,7 @@ func (s *Server) refreshPin() {
 		if text == s.pinLast[p.ChatID] {
 			continue
 		}
-		err = tg.editMessage(context.Background(), p.ChatID, p.MessageID, text)
+		err = tg.editMessage(context.Background(), p.ChatID, p.MessageID, text, nil)
 		if err != nil && !strings.Contains(err.Error(), "message is not modified") {
 			log.Printf("pin: edit chat %d: %v", p.ChatID, err)
 			continue // stale until the next event retries — fine

@@ -197,20 +197,20 @@ func (s *Server) listCrons() tgReply {
 	return tgReply{Text: strings.TrimSpace(b.String()), Keyboard: kb}
 }
 
-// deleteCronCallback handles a 🗑 button tap from /crons.
+// deleteCronCallback handles a 🗑 button tap from /crons: the job is removed
+// and the tapped listing refreshes in place — remaining buttons stay live, a
+// stale tap just heals the outdated list.
 func (s *Server) deleteCronCallback(data string) tgReply {
 	id, err := strconv.ParseInt(data, 10, 64)
 	if err != nil {
 		return tgReply{Text: "⚠ bad job id"}
 	}
-	ok, err := s.store.DeleteCron(id)
-	if err != nil {
+	if _, err := s.store.DeleteCron(id); err != nil {
 		return tgReply{Text: "⚠ " + err.Error()}
 	}
-	if !ok {
-		return tgReply{Text: fmt.Sprintf("job #%d not found", id)}
-	}
-	return tgReply{Text: fmt.Sprintf("🗑 removed #%d", id)}
+	r := s.listCrons()
+	r.Edit = true
+	return r
 }
 
 // resumeSession points the active pointer at an existing session and delivers

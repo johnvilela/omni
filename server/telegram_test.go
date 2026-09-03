@@ -56,6 +56,17 @@ func fakeTelegram(t *testing.T, sent chan<- map[string]any, actions, answered ch
 		sent <- body
 		fmt.Fprint(w, `{"ok":true,"result":{}}`)
 	})
+	// edit calls land on sent too, tagged with method so tests can tell
+	for _, m := range []string{"editMessageText", "editMessageReplyMarkup"} {
+		method := m
+		mux.HandleFunc("/botTOKEN/"+method, func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			body["method"] = method
+			sent <- body
+			fmt.Fprint(w, `{"ok":true,"result":true}`)
+		})
+	}
 	return httptest.NewServer(mux)
 }
 
@@ -343,6 +354,77 @@ func TestTelegramCallbackQuery(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no sendMessage within 3s")
+	}
+}
+
+// TestTelegramCallbackStripsKeyboard: a StripKeyboard reply first clears the
+// tapped message's buttons, then sends its text as a new message.
+func TestTelegramCallbackStripsKeyboard(t *testing.T) {
+	sent := make(chan map[string]any, 2)
+	srv := fakeTelegram(t, sent, nil, nil,
+		`{"update_id":7,"callback_query":{"id":"cb1","from":{"id":99},"message":{"message_id":5,"chat":{"id":42}},"data":"deny:1"}}`)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tg := NewTelegram(srv.URL, "TOKEN")
+	tg.answer = func(context.Context, int64, string) tgReply { return tgReply{} }
+	tg.callback = func(context.Context, int64, string) tgReply {
+		return tgReply{Text: "🚫 denied", StripKeyboard: true}
+	}
+	go tg.Poll(ctx)
+
+	select {
+	case body := <-sent:
+		kb, _ := json.Marshal(body["reply_markup"])
+		if body["method"] != "editMessageReplyMarkup" || body["message_id"] != float64(5) ||
+			string(kb) != `{"inline_keyboard":[]}` {
+			t.Fatalf("first call = %v; want an empty-markup edit of message 5", body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no editMessageReplyMarkup within 3s")
+	}
+	select {
+	case body := <-sent:
+		if body["method"] != nil || body["text"] != "🚫 denied" {
+			t.Fatalf("second call = %v; want the text as a fresh sendMessage", body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no sendMessage within 3s")
+	}
+}
+
+// TestTelegramCallbackEditsInPlace: an Edit reply rewrites the tapped message
+// (text + keyboard) and sends nothing new.
+func TestTelegramCallbackEditsInPlace(t *testing.T) {
+	sent := make(chan map[string]any, 2)
+	srv := fakeTelegram(t, sent, nil, nil,
+		`{"update_id":7,"callback_query":{"id":"cb1","from":{"id":99},"message":{"message_id":5,"chat":{"id":42}},"data":"cron-del:2"}}`)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tg := NewTelegram(srv.URL, "TOKEN")
+	tg.answer = func(context.Context, int64, string) tgReply { return tgReply{} }
+	tg.callback = func(context.Context, int64, string) tgReply {
+		return tgReply{Text: "#1 · daily", Keyboard: [][]button{{{Text: "🗑 #1", CallbackData: "cron-del:1"}}}, Edit: true}
+	}
+	go tg.Poll(ctx)
+
+	select {
+	case body := <-sent:
+		kb, _ := json.Marshal(body["reply_markup"])
+		if body["method"] != "editMessageText" || body["message_id"] != float64(5) ||
+			body["text"] != "#1 · daily" || !strings.Contains(string(kb), "cron-del:1") {
+			t.Fatalf("edit call = %v; want message 5 rewritten with the fresh keyboard", body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no editMessageText within 3s")
+	}
+	select {
+	case body := <-sent:
+		t.Fatalf("unexpected extra call %v; Edit must not also send", body)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 

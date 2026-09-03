@@ -139,10 +139,7 @@ func (s *Server) answerNotice(ctx context.Context, sess Session, text string) st
 	if err != nil {
 		return "⚠ " + err.Error()
 	}
-	if reply == "" {
-		return "(empty reply)" // telegram rejects empty text
-	}
-	return reply
+	return reply // "" = approval proposal sent out-of-band, nothing to deliver
 }
 
 // cliArgs builds one vendor CLI invocation. Every CLI runs bare — no MCP

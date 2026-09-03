@@ -101,17 +101,21 @@ func TestCommandCrons(t *testing.T) {
 		t.Fatalf("/crons keyboard = %+v", reply.Keyboard)
 	}
 
-	// delete via button tap (approved sender), prefix routed apart from resume
+	// delete via button tap (approved sender), prefix routed apart from
+	// resume; the reply is the refreshed listing, edited onto the tapped
+	// message so the surviving buttons stay live
 	store.AddPairing("telegram", "99", "CODE1234")
 	store.ApprovePairing("telegram", "CODE1234")
-	if r := srv.gatedCallback(context.Background(), 99, "cron-del:2"); !strings.Contains(r.Text, "#2") {
-		t.Fatalf("cron delete callback = %q", r.Text)
+	r := srv.gatedCallback(context.Background(), 99, "cron-del:2")
+	if !r.Edit || strings.Contains(r.Text, "#2") || !strings.Contains(r.Text, "#1") || len(r.Keyboard) != 1 {
+		t.Fatalf("cron delete callback = %+v; want the pruned listing edited in place", r)
 	}
 	if cs, _ := store.Crons(); len(cs) != 1 || cs[0].ID != 1 {
 		t.Fatalf("crons after delete = %+v", cs)
 	}
-	if r := srv.gatedCallback(context.Background(), 99, "cron-del:2"); !strings.Contains(r.Text, "not found") {
-		t.Fatalf("delete gone = %q", r.Text)
+	// a stale tap heals the outdated listing the same way
+	if r := srv.gatedCallback(context.Background(), 99, "cron-del:2"); !r.Edit || !strings.Contains(r.Text, "#1") {
+		t.Fatalf("stale delete tap = %+v; want the current listing", r)
 	}
 }
 

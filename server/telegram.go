@@ -22,9 +22,13 @@ type button struct {
 }
 
 // tgReply is one outgoing message: text plus an optional inline keyboard.
+// Edit and StripKeyboard act only on button-tap replies (the poller knows
+// which message was tapped); plain sends ignore them.
 type tgReply struct {
-	Text     string
-	Keyboard [][]button
+	Text          string
+	Keyboard      [][]button
+	Edit          bool // replace the tapped message (text + keyboard) instead of sending a new one
+	StripKeyboard bool // remove the tapped message's now-stale buttons, then send Text as usual
 }
 
 // tgFile is one inbound photo/document's metadata — no bytes; the download
@@ -81,7 +85,8 @@ type update struct {
 			ID int64 `json:"id"`
 		} `json:"from"`
 		Message *struct {
-			Chat struct {
+			MessageID int64 `json:"message_id"`
+			Chat      struct {
 				ID int64 `json:"id"`
 			} `json:"chat"`
 		} `json:"message"`
@@ -159,8 +164,23 @@ func (t *Telegram) sendReturningID(ctx context.Context, chatID int64, text strin
 	return res.MessageID, err
 }
 
-func (t *Telegram) editMessage(ctx context.Context, chatID, msgID int64, text string) error {
-	return t.call(ctx, "editMessageText", map[string]any{"chat_id": chatID, "message_id": msgID, "text": text}, nil)
+// editMessage rewrites one message's text and keyboard in place; nil kb drops
+// any existing buttons (telegram removes markup absent from the edit).
+func (t *Telegram) editMessage(ctx context.Context, chatID, msgID int64, text string, kb [][]button) error {
+	body := map[string]any{"chat_id": chatID, "message_id": msgID, "text": text}
+	if kb != nil {
+		body["reply_markup"] = map[string]any{"inline_keyboard": kb}
+	}
+	return t.call(ctx, "editMessageText", body, nil)
+}
+
+// editMarkup replaces one message's inline keyboard only; nil strips it.
+func (t *Telegram) editMarkup(ctx context.Context, chatID, msgID int64, kb [][]button) error {
+	if kb == nil {
+		kb = [][]button{}
+	}
+	return t.call(ctx, "editMessageReplyMarkup", map[string]any{"chat_id": chatID,
+		"message_id": msgID, "reply_markup": map[string]any{"inline_keyboard": kb}}, nil)
 }
 
 func (t *Telegram) pinMessage(ctx context.Context, chatID, msgID int64) error {
@@ -296,7 +316,18 @@ func (t *Telegram) Poll(ctx context.Context) {
 				if t.callback == nil || q.Message == nil {
 					continue // taps on messages too old for telegram to echo back
 				}
-				t.send(ctx, q.Message.Chat.ID, t.callback(ctx, q.From.ID, q.Data))
+				r := t.callback(ctx, q.From.ID, q.Data)
+				if r.Edit && r.Text != "" {
+					// refresh the tapped message in place (e.g. /crons after a delete)
+					if err := t.editMessage(ctx, q.Message.Chat.ID, q.Message.MessageID, r.Text, r.Keyboard); err != nil {
+						log.Printf("telegram: editMessageText: %v", err)
+					}
+					continue
+				}
+				if r.StripKeyboard {
+					t.editMarkup(ctx, q.Message.Chat.ID, q.Message.MessageID, nil) // best-effort
+				}
+				t.send(ctx, q.Message.Chat.ID, r)
 				continue
 			}
 			if m := u.Message; m != nil && (len(m.Photo) > 0 || m.Document != nil) {

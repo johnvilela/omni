@@ -151,6 +151,9 @@ func (s *Server) runTask(ctx context.Context, sessID, text string) {
 		log.Printf("task: session %s: interrupted", sessID)
 		return // preempt already acked; the killed run has no answer worth sending
 	}
+	if answer == "" {
+		return // approval gate: the proposal already went out with its buttons
+	}
 	active, ok, err := s.store.ActiveSession()
 	if err == nil && ok && active.ID == sessID {
 		s.notifyOwner(ctx, tgReply{Text: answer})
