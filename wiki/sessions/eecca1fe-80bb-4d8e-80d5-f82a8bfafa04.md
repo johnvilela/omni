@@ -1,6 +1,6 @@
 ---
 tags: [session, omni, cli, doctor]
-lastUsed: 2026-09-02
+lastUsed: 2026-09-03
 ---
 
 # `omni doctor`: pending-tree commit split, design, and shipping (2026-09-02, 16:43–17:12)
