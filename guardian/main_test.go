@@ -1,6 +1,11 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -120,5 +125,67 @@ func TestParsePgrep(t *testing.T) {
 		if got := parsePgrep(c.out); got != c.want {
 			t.Errorf("parsePgrep(%q) = %d; want %d", c.out, got, c.want)
 		}
+	}
+}
+
+func TestSemverLess(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"0.5.0", "0.6.0", true},
+		{"v0.9.9", "v0.10.1", true},
+		{"0.6.0", "0.6.0", false},
+		{"v0.11.0", "v0.10.2", false}, // source build ahead of release
+		{"0.6.0-dev", "0.6.0", false},
+		{"1.0", "1.0.1", true},
+	}
+	for _, c := range cases {
+		if got := semverLess(c.a, c.b); got != c.want {
+			t.Errorf("semverLess(%q, %q) = %v; want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// TestCheckUpdates: a watched repo with a newer release goes red naming the
+// tool; a failed lookup is indeterminate, never a fake verdict.
+func TestCheckUpdates(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/memoria/releases/latest":
+			fmt.Fprint(w, `{"tag_name":"v9.9.9"}`)
+		case "/repos/owner/current/releases/latest":
+			fmt.Fprint(w, `{"tag_name":"v0.1.0"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer fake.Close()
+	t.Setenv("OMNI_GITHUB_API", fake.URL)
+	bin := t.TempDir()
+	for name, v := range map[string]string{"memoria": "memoria 0.1.0", "current": "current 0.1.0", "broken": "broken 0.1.0"} {
+		script := "#!/bin/sh\necho '" + v + "'\n"
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+
+	r, ok := checkUpdates([]string{"owner/memoria", "owner/current"})
+	if !ok || r.ok || !strings.Contains(r.detail, "memoria 0.1.0 → v9.9.9") {
+		t.Fatalf("checkUpdates = %+v, %v; want a memoria-stale red", r, ok)
+	}
+	if strings.Contains(r.detail, "current 0.1.0") {
+		t.Fatalf("detail = %q; up-to-date tool must not be listed", r.detail)
+	}
+
+	// not installed: skipped entirely, everything else current -> green
+	if r, ok := checkUpdates([]string{"owner/current", "owner/ghost"}); !ok || !r.ok {
+		t.Fatalf("checkUpdates(current+missing) = %+v, %v; want green", r, ok)
+	}
+
+	// lookup failure: indeterminate, not green and not red
+	if _, ok := checkUpdates([]string{"owner/broken"}); ok { // installed, but no release route
+		t.Fatal("checkUpdates with failing lookup = definitive; want indeterminate")
 	}
 }

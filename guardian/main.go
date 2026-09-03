@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -30,6 +31,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
+
+	"omni/version"
 )
 
 // app and defaultAddr are overridable at build time via -ldflags -X so a dev
@@ -231,6 +234,113 @@ func checkAuth(db *sql.DB, cfg config) checkResult {
 	return checkResult{name: "auth", ok: true, detail: "llm credentials present"}
 }
 
+// ---- companion updates -------------------------------------------------------
+
+// updateEvery throttles the release lookups to a few times a day — a new
+// release can wait hours, and unauthenticated GitHub API calls are limited.
+// The stamp is a plain file mtime: guardian.json keys all render as alerts in
+// omni doctor / guardian status, so the schedule cannot live there.
+const updateEvery = 6 * time.Hour
+
+func updatesDue(now time.Time) bool {
+	fi, err := os.Stat(filepath.Join(dataDir(), "updates.stamp"))
+	return err != nil || now.Sub(fi.ModTime()) >= updateEvery
+}
+
+func stampUpdates() {
+	if err := os.WriteFile(filepath.Join(dataDir(), "updates.stamp"), nil, 0o600); err != nil {
+		log.Printf("updates: stamp: %v", err)
+	}
+}
+
+var versionRe = regexp.MustCompile(`v?[0-9]+\.[0-9]+(\.[0-9]+)*`)
+
+// installedVersion asks the tool itself; "" means not installed (or no
+// parsable version) — nothing to compare.
+func installedVersion(bin string) string {
+	out, err := exec.Command(bin, "--version").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return versionRe.FindString(string(out))
+}
+
+// latestRelease is the repo's newest GitHub release tag.
+func latestRelease(repo string) (string, error) {
+	base := os.Getenv("OMNI_GITHUB_API") // test/debug override
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	c := http.Client{Timeout: 10 * time.Second}
+	resp, err := c.Get(base + "/repos/" + repo + "/releases/latest")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github %s: %s", repo, resp.Status)
+	}
+	var r struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil || r.TagName == "" {
+		return "", fmt.Errorf("github %s: no tag_name (%v)", repo, err)
+	}
+	return r.TagName, nil
+}
+
+// semverLess reports a < b for dotted numeric versions; leading v and
+// pre-release suffixes are ignored, missing/non-numeric segments count as 0 —
+// so a source build ahead of the latest release never alerts.
+func semverLess(a, b string) bool {
+	num := func(v string, i int) int {
+		v, _, _ = strings.Cut(strings.TrimPrefix(v, "v"), "-")
+		parts := strings.Split(v, ".")
+		if i >= len(parts) {
+			return 0
+		}
+		n, _ := strconv.Atoi(parts[i])
+		return n
+	}
+	for i := range 3 {
+		if x, y := num(a, i), num(b, i); x != y {
+			return x < y
+		}
+	}
+	return false
+}
+
+// checkUpdates compares each watched repo (config.yaml update_repos, GitHub
+// "owner/name") against what is installed: the binary named like the repo,
+// except omni itself, whose version is compiled in (the CLI has no --version).
+// definitive is false when any lookup failed — the caller then keeps the
+// previous alert state instead of faking a recovery.
+func checkUpdates(repos []string) (checkResult, bool) {
+	var stale []string
+	for _, repo := range repos {
+		bin := filepath.Base(repo)
+		cur := installedVersion(bin)
+		if bin == "omni" {
+			cur = version.Version
+		}
+		if cur == "" {
+			continue // not installed — nothing to compare
+		}
+		latest, err := latestRelease(repo)
+		if err != nil {
+			log.Printf("updates: %v", err)
+			return checkResult{}, false
+		}
+		if semverLess(cur, latest) {
+			stale = append(stale, fmt.Sprintf("%s %s → %s", bin, cur, latest))
+		}
+	}
+	if len(stale) > 0 {
+		return checkResult{name: "updates", detail: strings.Join(stale, ", ") + " — rerun scripts/install.sh"}, true
+	}
+	return checkResult{name: "updates", ok: true, detail: "watched packages current"}, true
+}
+
 // ---- server probe + heal ---------------------------------------------------
 
 func probeServer() error {
@@ -292,10 +402,11 @@ func checkServer() checkResult {
 // ---- telegram --------------------------------------------------------------
 
 type config struct {
-	TelegramToken string `yaml:"telegram_token"`
-	OpenAIKey     string `yaml:"openai_key"`
-	AnthropicKey  string `yaml:"anthropic_key"`
-	GeminiKey     string `yaml:"gemini_key"`
+	TelegramToken string   `yaml:"telegram_token"`
+	OpenAIKey     string   `yaml:"openai_key"`
+	AnthropicKey  string   `yaml:"anthropic_key"`
+	GeminiKey     string   `yaml:"gemini_key"`
+	UpdateRepos   []string `yaml:"update_repos"` // GitHub owner/name repos to watch for new releases
 }
 
 // readConfig loads ~/.config/<app>/config.yaml; zero config on any error.
@@ -484,7 +595,23 @@ func main() {
 		checkServer(), checkTelegram(token),
 	}
 
-	msg, next := transitions(loadState(), results, time.Now())
+	now := time.Now()
+	updatesRan := false
+	if len(cfg.UpdateRepos) > 0 && updatesDue(now) {
+		if r, ok := checkUpdates(cfg.UpdateRepos); ok {
+			results = append(results, r)
+			updatesRan = true
+		}
+		stampUpdates() // even indeterminate: retry in hours, not every 2 minutes
+	}
+
+	prev := loadState()
+	msg, next := transitions(prev, results, now)
+	if !updatesRan { // a standing update alert must survive throttled runs
+		if since, ok := prev["updates"]; ok {
+			next["updates"] = since
+		}
+	}
 	if msg == "" {
 		return // nothing changed: no message, no state write
 	}
