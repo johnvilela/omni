@@ -157,7 +157,8 @@ func TestAgentAnswerSendFile(t *testing.T) {
 	}
 	bin := t.TempDir()
 	result := `{"result":"done\nTOOL:send_file {\"path\":\"` + payload + `\"}","session_id":"v1"}`
-	script := "#!/bin/sh\necho '" + result + "'\n"
+	// printf, not echo: dash's echo turns the \n JSON escape into a real newline
+	script := "#!/bin/sh\nprintf '%s\\n' '" + result + "'\n"
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
