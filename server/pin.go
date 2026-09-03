@@ -98,7 +98,14 @@ func (s *Server) renderPin(full bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	tasks, err := s.liveTasks()
+	if err != nil {
+		return "", err
+	}
 	line := fmt.Sprintf("%s · %d running · %d unread", head, s.runningCount(), unread)
+	if len(tasks) > 0 {
+		line += fmt.Sprintf(" · %d tasks", len(tasks))
+	}
 	if !full {
 		return line, nil
 	}
@@ -122,13 +129,16 @@ func (s *Server) renderPin(full bool) (string, error) {
 		}
 		b.WriteString("\n" + marker + " " + recentLabel(r))
 	}
+	for _, t := range tasks {
+		b.WriteString("\n" + taskLine(t, s.workerCount(t.ID)))
+	}
 	return b.String(), nil
 }
 
 // refreshPin re-renders and edits the pinned dashboard in place, best-effort.
 // Serialized by pinMu; every trigger renders current state, so bursts
 // coalesce into no-op edits caught by the pinLast dedupe. Lock order is
-// strictly pinMu → (qmu | s.mu | store), never reversed.
+// strictly pinMu → (qmu | s.mu | taskMu | store), never reversed.
 func (s *Server) refreshPin() {
 	s.pinMu.Lock()
 	defer s.pinMu.Unlock()

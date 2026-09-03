@@ -273,10 +273,29 @@ func (s *Server) analyzeFile(ctx context.Context, path, question string) string 
 	return strings.TrimSpace(reply)
 }
 
+// applyAgentTools executes the TOOL lines honored in agent-session and cron
+// replies: send_file plus task_start. Task-step replies deliberately get only
+// applySendFile (their DONE summary) — a step agent must never start
+// sub-tasks. The vendor CLI has its own real tools; chat file and cron tools
+// never run in agent mode.
+func (s *Server) applyAgentTools(ctx context.Context, reply string) string {
+	reply = s.applySendFile(ctx, reply)
+	if !strings.Contains(reply, "TOOL:task_start") {
+		return reply
+	}
+	lines := strings.Split(reply, "\n")
+	for i, line := range lines {
+		name, args, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || name != "TOOL:task_start" {
+			continue
+		}
+		lines[i] = s.runTool(ctx, "task_start", args)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 // applySendFile executes TOOL:send_file lines in an agent reply: uploads to
-// every approved chat now, replaces each line with a confirmation. Agent
-// replies get only this tool — the vendor CLI has its own real tools, and
-// cron tools never run in agent mode.
+// every approved chat now, replaces each line with a confirmation.
 func (s *Server) applySendFile(ctx context.Context, reply string) string {
 	if !strings.Contains(reply, "TOOL:send_file") {
 		return reply

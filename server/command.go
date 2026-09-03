@@ -48,6 +48,10 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		}
 		s.enqueue(sess.ID, arg)
 		return tgReply{Text: note + "agent session started (" + provider + ") — ⏳ running"}
+	case "/task":
+		return s.handleTask(arg)
+	case "/tasks":
+		return s.listTasks()
 	case "/sessions":
 		return s.listSessions()
 	case "/usage":

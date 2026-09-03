@@ -79,7 +79,7 @@ NEVER delete chrome-profile/):
 Never post, comment, message, or send connection requests directly. Draft the
 content, reply with the draft, and act only after the owner explicitly
 approves in a later message. Reading, searching and browsing are fine.
-` + "\n" + sendFileContract
+` + "\n" + sendFileContract + "\n" + taskContract
 
 // sendFileContract teaches the agent the file exchange over telegram; also
 // appended to pre-existing workspaces by ensureAgentDir.
@@ -93,6 +93,23 @@ TOOL:send_file {"path":"/absolute/path/to/file"}
 
 omni uploads the file and replaces the line with a confirmation. Absolute
 paths only; images arrive as photos, everything else as documents.
+`
+
+// taskContract teaches agent sessions the long-task machinery; also appended
+// to pre-existing workspaces by ensureAgentDir.
+const taskContract = `## Long tasks (checkpointed)
+
+For a goal too big for one session (hours of work, many sources), hand it to
+omni's task runner instead of grinding through it here — it drives autonomous
+fresh-context agent steps against a checkpoint file and survives restarts.
+Put this line alone on its own line in your final message:
+
+TOOL:task_start {"goal":"..."}
+
+Include EVERY relevant detail in the goal — task agents see nothing else from
+this session. Each task keeps its state in tasks/<id>/task.md in this
+workspace; you may read those files, but never edit a running task's
+checkpoint — the owner steers it with /task #<id> <text>.
 `
 
 // ensureAgentDir creates the workspace and seeds the instruction files; an
@@ -114,15 +131,28 @@ func ensureAgentDir() error {
 			return err
 		}
 	}
-	// migrate older workspaces: append the send_file contract once; owner
+	// migrate older workspaces: append missing contract sections once; owner
 	// edits are preserved, nothing is overwritten
 	for _, f := range []string{"CLAUDE.md", "AGENTS.md"} {
 		path := filepath.Join(dir, f)
 		raw, err := os.ReadFile(path)
-		if err != nil || strings.Contains(string(raw), "send_file") {
+		if err != nil {
 			continue
 		}
-		if err := os.WriteFile(path, append(raw, []byte("\n"+sendFileContract)...), 0o644); err != nil {
+		orig := len(raw)
+		for _, c := range []struct{ marker, section string }{
+			{"send_file", sendFileContract},
+			{"task_start", taskContract},
+		} {
+			if strings.Contains(string(raw), c.marker) {
+				continue
+			}
+			raw = append(raw, []byte("\n"+c.section)...)
+		}
+		if len(raw) == orig {
+			continue
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
 			return err
 		}
 	}
@@ -167,8 +197,8 @@ func (s *Server) agentAnswer(ctx context.Context, sess Session, text string) str
 			return "⚠ " + err.Error()
 		}
 	}
-	// uploads happen now; history keeps 📎 confirmations, never TOOL lines
-	reply = s.applySendFile(ctx, reply)
+	// uploads and task starts happen now; history keeps confirmations, never TOOL lines
+	reply = s.applyAgentTools(ctx, reply)
 	if _, err := s.store.AddMessage(sess.ID, "assistant", reply, time.Now().Unix()); err != nil {
 		return "⚠ " + err.Error()
 	}

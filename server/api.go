@@ -36,10 +36,21 @@ type Server struct {
 
 	pinMu   sync.Mutex
 	pinLast map[int64]string // chatID → last rendered dashboard text (edit dedupe)
+
+	taskMu      sync.Mutex
+	taskCancel  map[int64]context.CancelFunc // taskID → loop cancel; key present = loop alive
+	taskWorkers map[int64]int                // taskID → fan-out workers currently running
+	agentSem    chan struct{}                // global cap on concurrent one-shot agent runs
 }
 
 func NewServer(store *Store, telegramAPIBase string) *Server {
-	return &Server{store: store, apiBase: telegramAPIBase}
+	return &Server{
+		store:       store,
+		apiBase:     telegramAPIBase,
+		taskCancel:  map[int64]context.CancelFunc{},
+		taskWorkers: map[int64]int{},
+		agentSem:    make(chan struct{}, maxTaskAgents),
+	}
 }
 
 func (s *Server) telegramStatus() channelStatus {

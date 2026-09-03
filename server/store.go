@@ -105,6 +105,16 @@ func OpenStore(path string) (*Store, error) {
 			reply TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
+		// long checkpointed tasks (server/task.go): orchestration state only —
+		// checkpoint content lives in agentDir()/tasks/<id>/task.md
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'running',
+			step INTEGER NOT NULL DEFAULT 0,
+			note TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		)`,
 	} {
 		if _, err := db.Exec(ddl); err != nil {
 			db.Close()
@@ -470,6 +480,64 @@ func (s *Store) DeleteSessionProposals(sessionID string) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// Task is one long checkpointed task: status running|paused|blocked|done|
+// failed|cancelled; step counts completed loop iterations; note holds the
+// last progress note, DONE summary, BLOCKED question or failure reason.
+type Task struct {
+	ID, Step          int64
+	Goal, Status, Note string
+}
+
+func (s *Store) AddTask(goal string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO tasks (goal, created_at) VALUES (?, ?) RETURNING id`,
+		goal, time.Now().Unix()).Scan(&id)
+	return id, err
+}
+
+// Task looks one task up by id; false means it doesn't exist.
+func (s *Store) Task(id int64) (Task, bool, error) {
+	t := Task{ID: id}
+	err := s.db.QueryRow(`SELECT goal, status, step, note FROM tasks WHERE id = ?`, id).
+		Scan(&t.Goal, &t.Status, &t.Step, &t.Note)
+	if err == sql.ErrNoRows {
+		return Task{}, false, nil
+	}
+	if err != nil {
+		return Task{}, false, err
+	}
+	return t, true, nil
+}
+
+// Tasks lists every task, newest first; callers filter by status.
+func (s *Store) Tasks() ([]Task, error) {
+	rows, err := s.db.Query(`SELECT id, goal, status, step, note FROM tasks ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ts []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Goal, &t.Status, &t.Step, &t.Note); err != nil {
+			return nil, err
+		}
+		ts = append(ts, t)
+	}
+	return ts, rows.Err()
+}
+
+func (s *Store) SetTaskStatus(id int64, status, note string) error {
+	_, err := s.db.Exec(`UPDATE tasks SET status = ?, note = ? WHERE id = ?`, status, note, id)
+	return err
+}
+
+// BumpTaskStep counts one completed loop iteration and records its note.
+func (s *Store) BumpTaskStep(id int64, note string) error {
+	_, err := s.db.Exec(`UPDATE tasks SET step = step + 1, note = ? WHERE id = ?`, note, id)
+	return err
 }
 
 // Cron is one scheduled job.

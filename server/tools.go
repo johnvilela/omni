@@ -59,6 +59,16 @@ func (s *Server) runTool(ctx context.Context, name, args string) string {
 	switch name {
 	case "write_file", "read_file", "edit_file", "delete_file", "send_file", "analyze_file":
 		return s.fileTool(ctx, name, args)
+	case "task_start":
+		var a struct{ Goal string }
+		if err := json.Unmarshal([]byte(args), &a); err != nil {
+			return "⚠ bad tool arguments: " + err.Error()
+		}
+		id, err := s.startTask(a.Goal)
+		if err != nil {
+			return "⚠ " + err.Error()
+		}
+		return fmt.Sprintf("⚙ task #%d started — /tasks to follow", id)
 	}
 	var c struct {
 		ID                   int64

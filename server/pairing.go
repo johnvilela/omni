@@ -129,6 +129,15 @@ func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgR
 	if id, ok := strings.CutPrefix(data, "cron-del:"); ok {
 		return s.deleteCronCallback(id)
 	}
+	if id, ok := strings.CutPrefix(data, "task-pause:"); ok {
+		return s.taskCallback("pause", id)
+	}
+	if id, ok := strings.CutPrefix(data, "task-resume:"); ok {
+		return s.taskCallback("resume", id)
+	}
+	if id, ok := strings.CutPrefix(data, "task-cancel:"); ok {
+		return s.taskCallback("cancel", id)
+	}
 	if id, ok := strings.CutPrefix(data, "appr:"); ok {
 		return s.approveProposal(id, false)
 	}

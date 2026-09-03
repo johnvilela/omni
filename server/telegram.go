@@ -146,6 +146,8 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 	return t.call(ctx, "setMyCommands", map[string]any{"commands": []map[string]string{
 		{"command": "new", "description": "start a fresh chat session"},
 		{"command": "agent", "description": "agent session with tools — /agent [@openai|@claude] task"},
+		{"command": "task", "description": "long checkpointed task — /task <goal> | /task #id <text>"},
+		{"command": "tasks", "description": "list long tasks — pause, resume, cancel"},
 		{"command": "sessions", "description": "list recent sessions — tap to resume"},
 		{"command": "usage", "description": "llm usage per provider — tokens, cost, limits"},
 		{"command": "context", "description": "context usage of the active session — tokens per source"},

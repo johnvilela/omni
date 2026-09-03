@@ -33,7 +33,7 @@ func TestCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 20 usable tokens on top of the constant tool-section overhead
-	overhead := estTokens("\n\n" + cronPrompt(store) + "\n\n" + filePrompt())
+	overhead := estTokens("\n\n" + cronPrompt(store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(store))
 	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"),
 		[]byte(fmt.Sprintf("token_budget: %d\n", overhead+20)), 0o600); err != nil {
 		t.Fatal(err)

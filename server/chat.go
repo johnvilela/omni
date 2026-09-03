@@ -201,7 +201,7 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 	if wiki != "" {
 		memory = readMemory(wiki)
 	}
-	persona := readPersona() + "\n\n" + cronPrompt(s.store) + "\n\n" + filePrompt()
+	persona := readPersona() + "\n\n" + cronPrompt(s.store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(s.store)
 	budget, _ := chatBudget(s.chatProvider(sess))
 	prompt, dropped := composePrompt(persona, memory, history, text, budget)
 	reply, err := s.answerWith(ctx, sess.Provider, prompt)

@@ -15,9 +15,10 @@ import (
 // tools run inside the vendor CLI.
 
 // defaultApprovalTools are the privileged chat tools gated behind owner
-// approval; read_file and send_file stay free.
+// approval; read_file and send_file stay free. task_start is gated because it
+// spawns hours of full-permission agent runs.
 var defaultApprovalTools = []string{"write_file", "edit_file", "delete_file",
-	"cron_add", "cron_edit", "cron_delete", "analyze_file"}
+	"cron_add", "cron_edit", "cron_delete", "analyze_file", "task_start"}
 
 // gatedTools is the effective set needing approval: approval_tools (default
 // set when unset) minus approval_skip; nil when approvals is "off".
