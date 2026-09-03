@@ -20,6 +20,13 @@ The "unblock the serial telegram poller" deferral landed (was [[tasks]] item #1)
 
 - Tests that gate the fake llm (`promptRecorder.gate`) must **pre-seed the session with one exchange** or the background `nameSession` call eats a gate release and deadlocks the test.
 - An abandoned gated handler (interrupted run) keeps `httptest.Server.Close` hanging — release with `close(gate)`, not a send (a send races between the abandoned and the live handler).
-- Queue is in-memory; queued-but-unstarted texts die on restart (now the top [[tasks]] deferral). Unread answers survive restart via the DB column.
 
-Related: [[api]], [[tasks]]
+## v0.11.0 update: queue persistence, unread-first ordering, same-turn read_file
+
+Shipped together, committed `179fefb`. The queue's original in-memory-only limitation is gone:
+
+- **Queue persistence**: a new sqlite `queue` table (`id, session_id, text`) backs the in-memory queue. `enqueue`/`preempt` insert a row before starting/queuing a task; `drain` deletes the row the instant a task starts — from that point the user turn's own persistence in `messages` is what survives a crash. `replayQueue()` runs once at server boot (before `go srv.runCrons(...)` in main.go) and re-enqueues whatever rows a dead server accepted but never ran. A message that was merely queued (not yet started) when the server died now survives a restart; an in-flight task interrupted mid-run is still lost, same as before.
+- **Unread-first session ordering**: `RecentSessions` now orders `(unread != '') DESC, id DESC` instead of pure newest-first. A single query change fixes both the `/pin full` dashboard and the `/sessions` keyboard — an older session holding an undelivered answer can no longer drop off the 5-row cap. See [[decisions/pin-dashboard]].
+- **read_file lands same-turn**: `chatAnswer` detects a `TOOL:read_file` line in the llm reply; if it fired, one follow-up llm round runs with the file content already in view, and only that round's answer is returned to the user while history keeps both rounds. Previously the file content only became usable on the model's *next* turn (a ponytail-marked ceiling). Cap is one follow-up round — a `read_file` emitted inside the follow-up still waits a turn.
+
+Related: [[api]], [[tasks]], [[decisions/pin-dashboard]]
