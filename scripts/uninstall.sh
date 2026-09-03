@@ -18,6 +18,16 @@ for arg in "$@"; do
   esac
 done
 
+command -v gum >/dev/null || { echo "this script needs gum (https://github.com/charmbracelet/gum)"; exit 1; }
+
+gum style --foreground 6 \
+  '  ___  __  __ _   _ ___ ' \
+  ' / _ \|  \/  | \ | |_ _|' \
+  '| | | | |\/| |  \| || | ' \
+  '| |_| | |  | | |\  || | ' \
+  ' \___/|_|  |_|_| \_|___|'
+gum style --faint "uninstaller"
+
 BIN="$HOME/.local/bin"
 apps=(omni omni-dev)
 if [[ $DEV_ONLY == 1 ]]; then
@@ -33,14 +43,14 @@ for a in "${apps[@]}"; do
     systemctl --user disable --now "$a-server.service" 2>/dev/null || true
     rm -f "$unit"
     systemctl --user daemon-reload
-    echo "removed service $a-server"
+    gum log --level info "removed service $a-server"
   fi
   if [[ -f "$UNIT_DIR/$a-guardian.timer" ]]; then
     systemctl --user disable --now "$a-guardian.timer" 2>/dev/null || true
     rm -f "$UNIT_DIR/$a-guardian.timer" "$UNIT_DIR/$a-guardian.service"
     rm -rf "$UNIT_DIR/$a-guardian.timer.d"
     systemctl --user daemon-reload
-    echo "removed timer $a-guardian"
+    gum log --level info "removed timer $a-guardian"
   fi
 done
 
@@ -48,7 +58,7 @@ for a in "${apps[@]}"; do
   for f in "$BIN/$a" "$BIN/$a-server" "$BIN/$a-guardian"; do
     if [[ -f "$f" ]]; then
       rm -f "$f"
-      echo "removed $f"
+      gum log --level info "removed $f"
     fi
   done
 done
@@ -64,16 +74,11 @@ done
 
 if [[ ${#dirs[@]} -gt 0 ]]; then
   echo
-  echo "these hold your bot token and database:"
+  gum style --bold --foreground 3 "these hold your bot token and database:"
   printf '  %s\n' "${dirs[@]}"
-  if [[ $ASSUME_YES == 1 ]]; then
-    reply=y
-  else
-    read -rp "delete them? [y/N] " reply
-  fi
-  if [[ "$reply" =~ ^[Yy]$ ]]; then
+  if [[ $ASSUME_YES == 1 ]] || gum confirm --default=false "delete them?"; then
     rm -rf "${dirs[@]}"
-    echo "deleted"
+    gum log --level info "deleted"
   else
     echo "kept"
   fi

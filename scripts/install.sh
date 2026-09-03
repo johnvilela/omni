@@ -5,11 +5,23 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "==> running tests"
-go test ./...
+command -v gum >/dev/null || { echo "this script needs gum (https://github.com/charmbracelet/gum)"; exit 1; }
+step() { gum style --bold --foreground 6 "==> $*"; }
+warn() { gum log --level warn "$*"; }
 
-echo "==> building (prod)"
-PROD=1 scripts/build.sh
+gum style --foreground 6 \
+  '  ___  __  __ _   _ ___ ' \
+  ' / _ \|  \/  | \ | |_ _|' \
+  '| | | | |\/| |  \| || | ' \
+  '| |_| | |  | | |\  || | ' \
+  ' \___/|_|  |_|_| \_|___|'
+gum style --faint "installer"
+
+gum spin --show-error --title "running tests" -- go test ./...
+gum log --level info "tests passed"
+
+gum spin --show-error --title "building (prod)" -- env PROD=1 scripts/build.sh
+gum log --level info "built bin/omni{,-server,-guardian}"
 
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
@@ -63,28 +75,28 @@ systemctl --user restart omni-guardian.timer
 
 case ":$PATH:" in
   *":$BIN:"*) ;;
-  *) echo "warning: $BIN is not in your PATH" ;;
+  *) warn "$BIN is not in your PATH" ;;
 esac
 
-echo "==> agent dependencies (idempotent; failures warn, never abort)"
+step "agent dependencies (idempotent; failures warn, never abort)"
 # package manager: node + chromium for the /agent browser playbook
 PKGS_MISSING=""
 command -v node >/dev/null || PKGS_MISSING="nodejs npm"
 command -v chromium >/dev/null || command -v chromium-browser >/dev/null || PKGS_MISSING="$PKGS_MISSING chromium"
 if [ -n "$PKGS_MISSING" ]; then
   if command -v pacman >/dev/null; then
-    sudo pacman -S --needed --noconfirm $PKGS_MISSING || echo "warning: pacman install failed: $PKGS_MISSING"
+    sudo pacman -S --needed --noconfirm $PKGS_MISSING || warn "pacman install failed: $PKGS_MISSING"
   elif command -v apt-get >/dev/null; then
-    sudo apt-get install -y $PKGS_MISSING || echo "warning: apt install failed: $PKGS_MISSING (Ubuntu may need the chromium snap)"
+    sudo apt-get install -y $PKGS_MISSING || warn "apt install failed: $PKGS_MISSING (Ubuntu may need the chromium snap)"
   else
-    echo "warning: no pacman/apt-get — install manually: $PKGS_MISSING"
+    warn "no pacman/apt-get — install manually: $PKGS_MISSING"
   fi
 fi
 
 # playwright-cli (ships in the playwright npm package) drives the browser
 if ! command -v playwright-cli >/dev/null; then
   npm install -g playwright 2>/dev/null || sudo npm install -g playwright \
-    || echo "warning: could not npm install -g playwright"
+    || warn "could not npm install -g playwright"
 fi
 
 # agent workspace + persistent chrome profile (logins survive restarts;
@@ -99,20 +111,21 @@ if ! command -v memoria >/dev/null; then
     M_URL=$(curl -fsSL https://api.github.com/repos/johnvilela/memoria/releases/latest \
       | grep -o "https://[^\"]*memoria_linux_$M_ARCH") \
       && curl -fsSL -o "$BIN/memoria" "$M_URL" && chmod 755 "$BIN/memoria" \
-      || echo "warning: could not download memoria"
+      || warn "could not download memoria"
   else
-    echo "warning: no memoria release for $(uname -m)"
+    warn "no memoria release for $(uname -m)"
   fi
 fi
 if command -v memoria >/dev/null; then
   memoria setup --client claude-code,codex --global \
-    || echo "warning: memoria setup failed — run once by hand: memoria init --client claude-code,codex"
+    || warn "memoria setup failed — run once by hand: memoria init --client claude-code,codex"
   if ! memoria list 2>/dev/null | grep -q "$AGENT_DIR"; then
     (cd "$AGENT_DIR" && memoria bootstrap --background) \
-      || echo "warning: memoria bootstrap of the agent workspace failed"
+      || warn "memoria bootstrap of the agent workspace failed"
   fi
 fi
 
-echo "==> installed $BIN/omni, $BIN/omni-server and $BIN/omni-guardian"
-echo "==> service omni-server: $(systemctl --user is-active omni-server.service)"
-echo "==> timer omni-guardian: $(systemctl --user is-active omni-guardian.timer)"
+gum style --border rounded --border-foreground 6 --padding "0 1" \
+  "installed $BIN/omni, $BIN/omni-server and $BIN/omni-guardian" \
+  "service omni-server: $(systemctl --user is-active omni-server.service)" \
+  "timer omni-guardian: $(systemctl --user is-active omni-guardian.timer)"

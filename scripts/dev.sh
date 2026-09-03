@@ -8,7 +8,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP=omni-dev ADDR=:8788 scripts/build.sh
+command -v gum >/dev/null || { echo "this script needs gum (https://github.com/charmbracelet/gum)"; exit 1; }
+
+gum style --foreground 6 \
+  '  ___  __  __ _   _ ___ ' \
+  ' / _ \|  \/  | \ | |_ _|' \
+  '| | | | |\/| |  \| || | ' \
+  '| |_| | |  | | |\  || | ' \
+  ' \___/|_|  |_|_| \_|___|'
+gum style --faint "dev install"
+
+gum spin --show-error --title "building (dev)" -- env APP=omni-dev ADDR=:8788 scripts/build.sh
+gum log --level info "built bin/omni-dev{,-server,-guardian}"
 
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
@@ -60,10 +71,11 @@ systemctl --user restart omni-dev-guardian.timer
 
 case ":$PATH:" in
   *":$BIN:"*) ;;
-  *) echo "warning: $BIN is not in your PATH" ;;
+  *) gum log --level warn "$BIN is not in your PATH" ;;
 esac
 
-echo "==> installed $BIN/omni-dev, $BIN/omni-dev-server and $BIN/omni-dev-guardian"
-echo "==> service omni-dev-server: $(systemctl --user is-active omni-dev-server.service)"
-echo "==> timer omni-dev-guardian: $(systemctl --user is-active omni-dev-guardian.timer)"
-echo "    logs: journalctl --user -u omni-dev-server -f · guardian: journalctl --user -u omni-dev-guardian"
+gum style --border rounded --border-foreground 6 --padding "0 1" \
+  "installed $BIN/omni-dev, $BIN/omni-dev-server and $BIN/omni-dev-guardian" \
+  "service omni-dev-server: $(systemctl --user is-active omni-dev-server.service)" \
+  "timer omni-dev-guardian: $(systemctl --user is-active omni-dev-guardian.timer)" \
+  "logs: journalctl --user -u omni-dev-server -f · guardian: journalctl --user -u omni-dev-guardian"
