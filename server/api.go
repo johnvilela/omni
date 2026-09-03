@@ -41,6 +41,10 @@ type Server struct {
 	taskCancel  map[int64]context.CancelFunc // taskID → loop cancel; key present = loop alive
 	taskWorkers map[int64]int                // taskID → fan-out workers currently running
 	agentSem    chan struct{}                // global cap on concurrent one-shot agent runs
+
+	termMu      sync.Mutex
+	term        *termSession // /terminal root shell; nil = not in terminal mode
+	termPending *termPending // awaiting the next message as the sudo password
 }
 
 func NewServer(store *Store, telegramAPIBase string) *Server {

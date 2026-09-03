@@ -14,6 +14,9 @@ import (
 // everything else to the active session's answer path.
 func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 	text = strings.TrimSpace(text)
+	if r, ok := s.handleTerminal(ctx, text); ok {
+		return r
+	}
 	if rest, ok := strings.CutPrefix(text, "!"); ok {
 		return s.preempt(strings.TrimSpace(rest))
 	}

@@ -29,6 +29,7 @@ type tgReply struct {
 	Keyboard      [][]button
 	Edit          bool // replace the tapped message (text + keyboard) instead of sending a new one
 	StripKeyboard bool // remove the tapped message's now-stale buttons, then send Text as usual
+	DeleteInbound bool // delete the message that triggered this reply (e.g. a sudo password)
 }
 
 // tgFile is one inbound photo/document's metadata — no bytes; the download
@@ -63,7 +64,8 @@ func NewTelegram(apiBase, token string) *Telegram {
 type update struct {
 	UpdateID int64 `json:"update_id"`
 	Message  *struct {
-		Chat struct {
+		MessageID int64 `json:"message_id"`
+		Chat      struct {
 			ID int64 `json:"id"`
 		} `json:"chat"`
 		From struct {
@@ -153,6 +155,7 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 		{"command": "context", "description": "context usage of the active session — tokens per source"},
 		{"command": "crons", "description": "list scheduled jobs — tap to delete"},
 		{"command": "pin", "description": "toggle pinned status dashboard — /pin [full|clean]"},
+		{"command": "terminal", "description": "shell mode — run commands on this PC as root (/exit to leave)"},
 	}}, nil)
 }
 
@@ -362,6 +365,9 @@ func (t *Telegram) Poll(ctx context.Context) {
 			stop := t.typing(ctx, u.Message.Chat.ID)
 			reply := t.answer(ctx, from, u.Message.Text)
 			stop()
+			if reply.DeleteInbound {
+				t.deleteMessage(ctx, u.Message.Chat.ID, u.Message.MessageID) // best-effort: keep the sudo password out of history
+			}
 			t.send(ctx, u.Message.Chat.ID, reply)
 		}
 	}
