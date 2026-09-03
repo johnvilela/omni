@@ -148,6 +148,26 @@ func route(args []string) (command, error) {
 			return command{name: "pairing-" + args[1], channel: rest[0], arg: rest[1]}, nil
 		}
 		return command{}, fmt.Errorf("unknown subcommand %q — try `omni pairing --help`", args[1])
+	case "config":
+		if len(args) == 1 {
+			return command{name: "help", topic: "config"}, nil
+		}
+		switch args[1] {
+		case "--help", "-h":
+			return command{name: "help", topic: "config"}, nil
+		case "persona":
+			fs := flag.NewFlagSet("persona", flag.ContinueOnError)
+			fs.SetOutput(io.Discard) // we print our own help, not flag's usage dump
+			p := fs.String("p", "", "personality: normal | quiet | ultraquiet")
+			if err := fs.Parse(args[2:]); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return command{name: "help", topic: "config-persona"}, nil
+				}
+				return command{}, err
+			}
+			return command{name: "config-persona", arg: *p}, nil
+		}
+		return command{}, fmt.Errorf("unknown subcommand %q — try `omni config --help`", args[1])
 	case "guardian":
 		if len(args) == 1 {
 			return command{name: "guardian-status"}, nil
@@ -387,6 +407,54 @@ func runLLMSetDefault(provider string) int {
 	return 0
 }
 
+// readConfigKey returns one string value from config.yaml; "" when unset or
+// unreadable.
+func readConfigKey(key string) string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, app, "config.yaml"))
+	if err != nil {
+		return ""
+	}
+	cfg := map[string]any{}
+	yaml.Unmarshal(data, &cfg)
+	v, _ := cfg[key].(string)
+	return v
+}
+
+var personalities = []string{"normal", "quiet", "ultraquiet"}
+
+// runConfigPersona picks omni's reply personality and saves it to config.yaml;
+// the server re-reads config every turn, so it applies without a restart.
+func runConfigPersona(value string) int {
+	if value == "" {
+		current := readConfigKey("personality")
+		if current == "" {
+			current = "normal"
+		}
+		final, err := tea.NewProgram(newSelectModel("Personality (current: "+current+")", personalities)).Run()
+		if err != nil {
+			return fail(err)
+		}
+		value = final.(selectModel).choice
+		if value == "" {
+			fmt.Println(dimStyle.Render("canceled"))
+			return 1
+		}
+	}
+	if !slices.Contains(personalities, value) {
+		fmt.Fprintln(os.Stderr, errStyle.Render(fmt.Sprintf("unknown personality %q — one of: %s", value, strings.Join(personalities, ", "))))
+		return 2
+	}
+	if err := saveConfigKey("personality", value); err != nil {
+		return fail(err)
+	}
+	fmt.Println(okStyle.Render("✓") + " personality set to " + selectedStyle.Render(value))
+	return 0
+}
+
 var llmEfforts = []string{"low", "medium", "high"}
 
 // runLLMModel picks a provider's model (and optional effort) and saves them to
@@ -578,6 +646,10 @@ func run(args []string) int {
 			fmt.Print(helpLLMSetDefault())
 		case "llm-model":
 			fmt.Print(helpLLMModel())
+		case "config":
+			fmt.Print(helpConfig())
+		case "config-persona":
+			fmt.Print(helpConfigPersona())
 		case "pairing":
 			fmt.Print(helpPairing())
 		case "guardian":
@@ -648,6 +720,8 @@ func run(args []string) int {
 			return fail(err)
 		}
 		fmt.Println(okStyle.Render("✓") + " revoked " + selectedStyle.Render(cmd.arg))
+	case "config-persona":
+		return runConfigPersona(cmd.arg)
 	case "guardian-status":
 		return runGuardianStatus()
 	case "guardian-interval":

@@ -175,13 +175,14 @@ func (s *Server) agentAnswer(ctx context.Context, sess Session, text string) str
 	if _, err := s.store.AddMessage(sess.ID, "user", text, time.Now().Unix()); err != nil {
 		return "⚠ " + err.Error()
 	}
+	send := text + personalityMarker() // style rides the wire; history keeps the owner's words
 	var reply, vendorID string
 	var u callUsage
 	switch sess.Provider {
 	case "openai":
-		reply, vendorID, u, err = runCodexAgent(ctx, sess.VendorSessionID, text)
+		reply, vendorID, u, err = runCodexAgent(ctx, sess.VendorSessionID, send)
 	default:
-		reply, vendorID, u, err = runClaudeAgent(ctx, sess.VendorSessionID, text)
+		reply, vendorID, u, err = runClaudeAgent(ctx, sess.VendorSessionID, send)
 	}
 	if err != nil {
 		return "⚠ " + err.Error()

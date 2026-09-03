@@ -219,6 +219,35 @@ func TestEnsureAgentDirAppendsContract(t *testing.T) {
 	}
 }
 
+// TestAgentAnswerPersonality: with personality set, the style marker rides
+// the wire to the vendor CLI but never lands in the stored history.
+func TestAgentAnswerPersonality(t *testing.T) {
+	srv, store := newLLMTestServer(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	argsFile, _ := writeAgentFakes(t)
+	if err := os.MkdirAll(filepath.Dir(ConfigPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ConfigPath(), []byte("personality: quiet\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store.AddSession("s1", true, "claude")
+	store.SetActiveSession("s1")
+	store.AddMessage("s1", "user", "seed", 1) // no background nameSession
+	store.AddMessage("s1", "assistant", "seeded", 2)
+
+	sess, _, _ := store.Session("s1")
+	srv.agentAnswer(context.Background(), sess, "do the thing")
+	args := strings.Join(readLines(t, argsFile), "\n")
+	if !strings.Contains(args, "quiet mode:") || !strings.Contains(args, "do the thing") {
+		t.Fatalf("claude args = %q; want task text + quiet marker", args)
+	}
+	ms, _ := store.Messages("s1")
+	if user := ms[len(ms)-2].Content; user != "do the thing" {
+		t.Fatalf("stored user turn = %q; want the owner's words only", user)
+	}
+}
+
 // TestAgentAnswerClaudeError: a claude result with is_error must surface as
 // an error notice, not as a normal reply.
 func TestAgentAnswerClaudeError(t *testing.T) {

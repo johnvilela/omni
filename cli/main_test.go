@@ -45,6 +45,11 @@ func TestRoute(t *testing.T) {
 		{[]string{"llm", "model"}, "llm-model", "", "", false},
 		{[]string{"llm", "model", "-p", "openai"}, "llm-model", "openai", "", false},
 		{[]string{"llm", "model", "--help"}, "help", "", "llm-model", false},
+		{[]string{"config"}, "help", "", "config", false},
+		{[]string{"config", "--help"}, "help", "", "config", false},
+		{[]string{"config", "persona"}, "config-persona", "", "", false},
+		{[]string{"config", "persona", "--help"}, "help", "", "config-persona", false},
+		{[]string{"config", "junk"}, "", "", "", true},
 		{[]string{"pairing"}, "pairing-list", "", "", false},
 		{[]string{"pairing", "--help"}, "help", "", "pairing", false},
 		{[]string{"pairing", "-h"}, "help", "", "pairing", false},
@@ -258,6 +263,42 @@ func TestRunLLMSetDefault(t *testing.T) {
 	}
 }
 
+func TestRunConfigPersona(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	if err := saveConfigKey("openai_key", "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+	if code := runConfigPersona("quiet"); code != 0 {
+		t.Fatalf("runConfigPersona(quiet) = %d, want 0", code)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, "omni", "config.yaml"))
+	if err != nil {
+		t.Fatalf("config not written: %v", err)
+	}
+	var cfg map[string]string
+	if yaml.Unmarshal(data, &cfg) != nil || cfg["personality"] != "quiet" || cfg["openai_key"] != "sk-test" {
+		t.Fatalf("config content = %q, want personality alongside the key", data)
+	}
+	if got := readConfigKey("personality"); got != "quiet" {
+		t.Fatalf("readConfigKey = %q, want quiet", got)
+	}
+
+	if code := runConfigPersona("shouty"); code != 2 {
+		t.Fatalf("runConfigPersona(shouty) = %d, want 2", code)
+	}
+	if got := readConfigKey("personality"); got != "quiet" {
+		t.Fatalf("unknown personality must not overwrite the config; got %q", got)
+	}
+	if code := runConfigPersona("normal"); code != 0 {
+		t.Fatalf("runConfigPersona(normal) = %d, want 0", code)
+	}
+	if got := readConfigKey("personality"); got != "normal" {
+		t.Fatalf("personality = %q, want normal", got)
+	}
+}
+
 func TestRunLLMModel(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
@@ -310,7 +351,7 @@ func TestRunLLMModel(t *testing.T) {
 
 func TestHelpScreens(t *testing.T) {
 	root := helpText()
-	for _, want := range []string{"omni channels", "omni status", "omni doctor", "omni llm", "omni pairing", "omni guardian", "--help", "-server", version} {
+	for _, want := range []string{"omni channels", "omni status", "omni doctor", "omni llm", "omni pairing", "omni config", "omni guardian", "--help", "-server", version} {
 		if !strings.Contains(root, want) {
 			t.Errorf("root help missing %q", want)
 		}

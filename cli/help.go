@@ -29,6 +29,7 @@ func helpText() string {
 		row("omni channels", "manage message channels") +
 		row("omni llm", "manage llm providers (openai, claude, gemini)") +
 		row("omni pairing", "control who may talk to the bot") +
+		row("omni config", "tune omni's behavior (reply persona)") +
 		row("omni guardian", "watchdog status, check interval and on/off") +
 		row("omni help", "show this help (also: omni --help, omni -h)") +
 		"\n" + helpStyle.Render("      run `omni <command> --help` for flags, subcommands and examples") + "\n" +
@@ -65,6 +66,32 @@ func helpPairing() string {
 		"      omni pairing revoke telegram 123456789\n\n" +
 		helpStyle.Render("      an unpaired user who messages the bot receives a pairing code;\n"+
 			"      the bot answers nothing else until you approve it") + "\n\n"
+}
+
+func helpConfig() string {
+	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
+		"      " + cmdStyle.Render("omni config persona") + "\n\n" +
+		titleStyle.Render("  SUBCOMMANDS") + "\n\n" +
+		row("omni config persona", "pick omni's reply style (see persona --help)") +
+		"\n" + titleStyle.Render("  EXAMPLES") + "\n\n" +
+		"      omni config persona\n" +
+		"      omni config persona -p quiet\n\n" +
+		helpStyle.Render("      settings live in ~/.config/"+app+"/config.yaml and apply on the\n"+
+			"      next message — no server restart needed") + "\n\n"
+}
+
+func helpConfigPersona() string {
+	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
+		"      " + cmdStyle.Render("omni config persona [-p <personality>]") + "\n\n" +
+		titleStyle.Render("  FLAGS") + "\n\n" +
+		row("-p <personality>", "normal | quiet | ultraquiet, skipping the picker") +
+		"\n" + titleStyle.Render("  EXAMPLES") + "\n\n" +
+		"      omni config persona\n" +
+		"      omni config persona -p ultraquiet\n\n" +
+		helpStyle.Render("      normal = today's style · quiet = short, direct, human answers ·\n"+
+			"      ultraquiet = bare minimum, telegraph style. Applies to chat, cron\n"+
+			"      prompt jobs and agent sessions; saved as personality in\n"+
+			"      ~/.config/"+app+"/config.yaml") + "\n\n"
 }
 
 func helpGuardian() string {
