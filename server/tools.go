@@ -38,9 +38,8 @@ a message implies a recurring need, offer to create one first.`)
 
 // applyTools executes TOOL: lines in an llm chat reply, replacing each with
 // a deterministic confirmation; everything else passes through. Single-pass:
-// the model sees the confirmations in history on the next turn, not the
-// results in this one (ponytail: read_file answers land a turn late — add a
-// second llm round if that ever grates).
+// only read_file results feed back into the same turn, via the follow-up
+// round in chatAnswer.
 func (s *Server) applyTools(ctx context.Context, reply string) string {
 	if !strings.Contains(reply, "TOOL:") {
 		return reply

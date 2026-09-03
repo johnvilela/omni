@@ -147,7 +147,7 @@ func TestPinFullMode(t *testing.T) {
 
 	srv.handlePin(context.Background(), "full")
 	sent := nextCall(t, calls, "sendMessage")
-	want := "▶ beta · 0 running · 1 unread\n\n▶ beta\n✉ alpha"
+	want := "▶ beta · 0 running · 1 unread\n\n✉ alpha\n▶ beta" // unread floats first
 	if sent["text"] != want {
 		t.Fatalf("full dashboard = %q, want %q", sent["text"], want)
 	}

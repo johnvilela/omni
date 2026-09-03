@@ -6,18 +6,34 @@ import (
 )
 
 // sessionQueue is one session's background work: the in-flight task's cancel
-// (nil when between tasks) plus the messages waiting behind it.
-// ponytail: in-memory — queued-but-unstarted texts die with the server (user
-// turns persist at run time, not enqueue time); persist queue rows if it hurts.
+// (nil when between tasks) plus the messages waiting behind it. Pending texts
+// are mirrored in the queue table so a restart replays them (replayQueue).
 type sessionQueue struct {
 	cancel  context.CancelFunc
-	pending []string
+	pending []queuedMsg
 }
 
-// enqueue queues text for one session and starts its drainer when none is
+// queuedMsg is one waiting text plus its queue-table row id (0 when
+// persisting failed — the message still runs, it just won't survive a
+// restart).
+type queuedMsg struct {
+	id   int64
+	text string
+}
+
+// enqueue persists text and queues it for one session.
+func (s *Server) enqueue(sessID, text string) {
+	id, err := s.store.AddQueued(sessID, text)
+	if err != nil {
+		log.Printf("queue: persist: %v", err)
+	}
+	s.enqueueMsg(sessID, queuedMsg{id, text})
+}
+
+// enqueueMsg queues one message and starts the session's drainer when none is
 // running. One drainer per session (FIFO — serializes vendor CLI resumes);
 // different sessions run concurrently.
-func (s *Server) enqueue(sessID, text string) {
+func (s *Server) enqueueMsg(sessID string, m queuedMsg) {
 	s.qmu.Lock()
 	defer s.qmu.Unlock()
 	if s.queues == nil {
@@ -28,10 +44,23 @@ func (s *Server) enqueue(sessID, text string) {
 		q = &sessionQueue{}
 		s.queues[sessID] = q
 	}
-	q.pending = append(q.pending, text)
+	q.pending = append(q.pending, m)
 	if !running {
 		go s.drain(sessID)
 		go s.refreshPin()
+	}
+}
+
+// replayQueue re-enqueues texts a previous run accepted but never started.
+// ponytail: a preempt-prepended text replays in plain id order — fine.
+func (s *Server) replayQueue() {
+	rows, err := s.store.QueuedMessages()
+	if err != nil {
+		log.Printf("queue: replay: %v", err)
+		return
+	}
+	for _, r := range rows {
+		s.enqueueMsg(r.SessionID, queuedMsg{r.ID, r.Text})
 	}
 }
 
@@ -46,7 +75,11 @@ func (s *Server) preempt(text string) tgReply {
 	q, running := s.queues[sess.ID]
 	if running {
 		if text != "" {
-			q.pending = append([]string{text}, q.pending...)
+			id, err := s.store.AddQueued(sess.ID, text)
+			if err != nil {
+				log.Printf("queue: persist: %v", err)
+			}
+			q.pending = append([]queuedMsg{{id, text}}, q.pending...)
 		}
 		if q.cancel != nil {
 			q.cancel()
@@ -76,13 +109,18 @@ func (s *Server) drain(sessID string) {
 			go s.refreshPin()
 			return
 		}
-		text := q.pending[0]
+		m := q.pending[0]
 		q.pending = q.pending[1:]
 		ctx, cancel := context.WithCancel(context.Background())
 		q.cancel = cancel
 		s.qmu.Unlock()
 
-		s.runTask(ctx, sessID, text)
+		// the task is starting: the user turn persists inside it, so the
+		// queue row has done its job
+		if err := s.store.DeleteQueued(m.id); err != nil {
+			log.Printf("queue: %v", err)
+		}
+		s.runTask(ctx, sessID, m.text)
 		cancel()
 
 		s.qmu.Lock()

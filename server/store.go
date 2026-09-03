@@ -74,6 +74,13 @@ func OpenStore(path string) (*Store, error) {
 			text TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
+		// queued-but-unstarted background texts; a row lives from enqueue
+		// until its task starts running, so a restart replays what never ran
+		`CREATE TABLE IF NOT EXISTS queue (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			text TEXT NOT NULL
+		)`,
 		// pinned status-dashboard message per owner chat (see server/pin.go)
 		`CREATE TABLE IF NOT EXISTS pins (
 			chat_id INTEGER PRIMARY KEY,
@@ -257,12 +264,13 @@ type RecentSession struct {
 	Agent                      bool
 }
 
-// RecentSessions lists the n newest sessions with the first user message as
+// RecentSessions lists n sessions, unread ones first (a stored answer must
+// never drop off the capped listings), then newest; the first user message is
 // the display fallback for unnamed ones.
 func (s *Store) RecentSessions(n int) ([]RecentSession, error) {
 	rows, err := s.db.Query(`SELECT id, name, agent, unread,
 		COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id ORDER BY m.id LIMIT 1), '')
-		FROM sessions s ORDER BY id DESC LIMIT ?`, n)
+		FROM sessions s ORDER BY (unread != '') DESC, id DESC LIMIT ?`, n)
 	if err != nil {
 		return nil, err
 	}
@@ -372,6 +380,44 @@ func (s *Store) Messages(sessionID string) ([]Message, error) {
 		ms = append(ms, m)
 	}
 	return ms, rows.Err()
+}
+
+// QueuedMessage is one persisted queue row, replayed on server start.
+type QueuedMessage struct {
+	ID        int64
+	SessionID string
+	Text      string
+}
+
+// AddQueued persists one queued-but-unstarted background text; deleted when
+// its task starts (from then on the user turn itself is persisted).
+func (s *Store) AddQueued(sessionID, text string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO queue (session_id, text) VALUES (?, ?) RETURNING id`,
+		sessionID, text).Scan(&id)
+	return id, err
+}
+
+func (s *Store) DeleteQueued(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM queue WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) QueuedMessages() ([]QueuedMessage, error) {
+	rows, err := s.db.Query(`SELECT id, session_id, text FROM queue ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var qs []QueuedMessage
+	for rows.Next() {
+		var q QueuedMessage
+		if err := rows.Scan(&q.ID, &q.SessionID, &q.Text); err != nil {
+			return nil, err
+		}
+		qs = append(qs, q)
+	}
+	return qs, rows.Err()
 }
 
 // Cron is one scheduled job.

@@ -197,6 +197,13 @@ func TestStoreRecentSessions(t *testing.T) {
 	if got[4].ID != "b" {
 		t.Fatalf("RecentSessions[4] = %+v; want b (a dropped)", got[4])
 	}
+
+	// unread sessions float above newer ones so stored answers stay visible
+	s.AppendSessionUnread("b", "psst")
+	got, err = s.RecentSessions(5)
+	if err != nil || got[0].ID != "b" || got[1].ID != "f" {
+		t.Fatalf("RecentSessions with unread = %+v, %v; want b first", got, err)
+	}
 }
 
 // TestStoreMigratesOldSchema: a DB created before the agent columns existed

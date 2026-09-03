@@ -55,6 +55,7 @@ func main() {
 		}
 	}
 
+	srv.replayQueue() // texts accepted but never started by the previous run
 	go srv.runCrons(context.Background())
 
 	addr := os.Getenv("OMNI_ADDR")

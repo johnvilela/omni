@@ -101,8 +101,9 @@ TOOL:analyze_file {"path":"inbox/photo.jpg","question":"what is this?"}
 
 write_file creates or overwrites; edit_file replaces every exact match;
 send_file delivers the file to the owner's phone (images as photos, else
-documents); read_file puts the content into the chat — use it on your next
-turn, and it works on TEXT files only. You cannot see images, PDFs or other
+documents); read_file works on TEXT files only and feeds the content back to
+you in the same turn — emit the line alone and you will be asked to continue
+with the content in view. You cannot see images, PDFs or other
 binary content yourself — use analyze_file for those: it has the agent look
 at the file and returns its answer in place of the tool line, so use it
 whenever the owner asks about a photo or document they sent (it is slow —

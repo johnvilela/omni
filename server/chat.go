@@ -202,7 +202,20 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 	if err != nil {
 		return "", err
 	}
+	readRan := strings.Contains(reply, "TOOL:read_file")
 	reply = s.applyTools(ctx, reply) // history keeps confirmations, not TOOL lines
+	visible := reply
+	if readRan {
+		// one follow-up round so read_file content is used this turn, not
+		// next; the user sees only the final answer, history keeps both. A
+		// read_file in the follow-up itself still lands a turn late.
+		followup := prompt + "\n\nassistant: " + reply +
+			"\n\nThe 📄 lines above are the file contents you asked for. Answer the user's message now using them; do not emit TOOL:read_file again."
+		if more, err := s.answerWith(ctx, sess.Provider, followup); err == nil && strings.TrimSpace(more) != "" {
+			visible = s.applyTools(ctx, more)
+			reply += "\n\n" + visible
+		}
+	}
 	if _, err := s.store.AddMessage(sess.ID, "assistant", reply, time.Now().Unix()); err != nil {
 		return "", err
 	}
@@ -218,7 +231,7 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 	if wiki != "" && len(overflow) > 0 && s.digesting.CompareAndSwap(false, true) {
 		go s.onCompaction(sess.ID, overflow)
 	}
-	return reply, nil
+	return visible, nil
 }
 
 // nameSession asks the default llm to title the session; best-effort, any

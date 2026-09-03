@@ -113,6 +113,7 @@ type promptRecorder struct {
 	mu      sync.Mutex
 	prompts []string
 	reply   string
+	replies []string      // when set, consumed one per call before falling back to reply
 	gate    chan struct{} // when set, each reply waits for one receive (or a close)
 }
 
@@ -128,6 +129,10 @@ func (r *promptRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.prompts = append(r.prompts, body.Messages[0].Content)
 	}
 	reply := r.reply
+	if len(r.replies) > 0 {
+		reply = r.replies[0]
+		r.replies = r.replies[1:]
+	}
 	gate := r.gate
 	r.mu.Unlock()
 	if gate != nil {
@@ -322,5 +327,36 @@ func TestChatBudget(t *testing.T) {
 	write("token_budget: 123\n")
 	if got, clamped := chatBudget("claude"); got != 123 || clamped {
 		t.Fatalf("chatBudget(123) = %d, %v; want 123", got, clamped)
+	}
+}
+
+// TestChatReadFileFollowup: a TOOL:read_file reply triggers one extra llm
+// round with the content in view; the user sees only the final answer while
+// history keeps both.
+func TestChatReadFileFollowup(t *testing.T) {
+	srv, store, rec := newChatTestServer(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	sess := seedSession(t, srv)
+	if err := os.MkdirAll(filesDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filesDir(), "notes.txt"), []byte("the secret is 42"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec.replies = []string{`TOOL:read_file {"path":"notes.txt"}`, "the answer is 42"}
+
+	reply, err := srv.chatAnswer(context.Background(), sess, "what do my notes say?")
+	if err != nil || reply != "the answer is 42" {
+		t.Fatalf("chatAnswer = %q, %v; want the follow-up answer only", reply, err)
+	}
+	prompts := rec.all()
+	last := prompts[len(prompts)-1]
+	if !strings.Contains(last, "the secret is 42") || !strings.Contains(last, "Answer the user's message now") {
+		t.Fatalf("follow-up prompt = %q; want file content + continue instruction", last)
+	}
+	ms, _ := store.Messages(sess.ID)
+	stored := ms[len(ms)-1].Content
+	if !strings.Contains(stored, "the secret is 42") || !strings.Contains(stored, "the answer is 42") {
+		t.Fatalf("stored = %q; want file content + final answer", stored)
 	}
 }

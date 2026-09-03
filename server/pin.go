@@ -102,8 +102,8 @@ func (s *Server) renderPin(full bool) (string, error) {
 	if !full {
 		return line, nil
 	}
-	// ponytail: the list shows only the 5 newest sessions — an older unread
-	// one can drop off it; the counts line above stays globally correct.
+	// ponytail: capped at 5 rows — unread-first ordering keeps stored answers
+	// visible unless more than 5 sessions hold one.
 	rs, err := s.store.RecentSessions(5)
 	if err != nil {
 		return "", err

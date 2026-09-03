@@ -148,3 +148,44 @@ func TestQueuePreemptBare(t *testing.T) {
 		t.Fatalf("messages = %+v; want only msg1's user turn added", ms)
 	}
 }
+
+// TestQueuePersistsRows: an accepted-but-unstarted text has a queue row; the
+// row is deleted the moment its task starts.
+func TestQueuePersistsRows(t *testing.T) {
+	srv, store, rec := newChatTestServer(t)
+	rec.gate = make(chan struct{})
+	sess := seedSession(t, srv)
+
+	srv.handleMessage(context.Background(), "msg1")
+	waitFor(t, func() bool { return len(rec.all()) == 1 }) // msg1 started: its row is gone
+	srv.handleMessage(context.Background(), "msg2")
+	rows, _ := store.QueuedMessages()
+	if len(rows) != 1 || rows[0].Text != "msg2" || rows[0].SessionID != sess.ID {
+		t.Fatalf("queue rows = %+v; want just msg2", rows)
+	}
+	close(rec.gate)
+	waitFor(t, func() bool { return !srv.running(sess.ID) })
+	if rows, _ := store.QueuedMessages(); len(rows) != 0 {
+		t.Fatalf("queue rows after drain = %+v; want none", rows)
+	}
+}
+
+// TestQueueRestartReplays: rows left by a dead server run on the next start.
+func TestQueueRestartReplays(t *testing.T) {
+	srv, store, _ := newChatTestServer(t)
+	sess := seedSession(t, srv)
+	// simulate the previous run's leftovers: rows in the table, no drainer
+	store.AddQueued(sess.ID, "msg1")
+	store.AddQueued(sess.ID, "msg2")
+
+	srv.replayQueue()
+	waitFor(t, func() bool { return !srv.running(sess.ID) })
+	ms, _ := store.Messages(sess.ID)
+	if len(ms) != 6 || ms[2].Content != "msg1" || ms[3].Content != "pong" ||
+		ms[4].Content != "msg2" || ms[5].Content != "pong" {
+		t.Fatalf("messages = %+v; want replayed msg1 then msg2 exchanges", ms)
+	}
+	if rows, _ := store.QueuedMessages(); len(rows) != 0 {
+		t.Fatalf("queue rows = %+v; want none after replay", rows)
+	}
+}
