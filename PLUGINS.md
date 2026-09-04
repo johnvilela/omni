@@ -124,6 +124,9 @@ Each `commands` entry enables one command in omni's bot:
   types after the command is whitespace-split and appended
   (`/pecunia_today last week` → `pecunia today --plain last week`). No shell
   is involved: no quoting, no globbing, no pipes.
+- `prompt`: the LLM alternative to `argv` — each command declares **exactly
+  one** of the two (omni ≥ v0.25.0; older installs reject a prompt command
+  at install). See "Prompt commands" below.
 
 Execution contract:
 
@@ -138,6 +141,24 @@ Execution contract:
 
 The menu updates immediately when a running server is reachable at install
 time, otherwise on the server's next start.
+
+### Prompt commands
+
+A command that declares `prompt` instead of `argv` does not exec anything:
+omni starts a **fresh agent session** (the `/agent` machinery — your plugin's
+MCP tools and skills are available) whose first message is the prompt.
+
+- Anything the user types after the command is appended **raw** — one line,
+  `Owner's message: <text>`, punctuation intact, no word-splitting.
+- Omni then appends its own context: where plan pages live (when memoria is
+  set up) and the scheduled-jobs contract with the current job list — so the
+  session can write plan pages with its file tools and manage crons by
+  emitting `TOOL:cron_add` / `TOOL:cron_edit` / `TOOL:cron_delete` lines.
+- The command replies `⏳ /<name> running (<provider>)` immediately; the real
+  answer arrives asynchronously through the session queue under the agent cap
+  (15 minutes), not the 60-second exec cap. Follow-up messages from the user
+  continue the same session — an interview works.
+- Write the prompt self-contained: codex-backed sessions load no skills.
 
 ## Uninstall
 

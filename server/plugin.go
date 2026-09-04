@@ -27,7 +27,8 @@ type pluginMCP struct {
 type pluginCommand struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Argv        []string `json:"argv"`
+	Argv        []string `json:"argv,omitempty"`
+	Prompt      string   `json:"prompt,omitempty"`
 }
 
 type pluginManifest struct {
@@ -121,7 +122,13 @@ func (s *Server) pluginReply(ctx context.Context, cmd, arg string) (tgReply, boo
 	name := strings.ReplaceAll(strings.TrimPrefix(cmd, "/"), "-", "_")
 	for _, m := range loadPluginManifests() {
 		for _, c := range m.Commands {
-			if c.Name != name || len(c.Argv) == 0 {
+			if c.Name != name {
+				continue
+			}
+			if c.Prompt != "" {
+				return s.pluginAgentReply(ctx, c, arg), true
+			}
+			if len(c.Argv) == 0 {
 				continue
 			}
 			argv := append(slices.Clone(c.Argv), strings.Fields(arg)...)
@@ -136,6 +143,41 @@ func (s *Server) pluginReply(ctx context.Context, cmd, arg string) (tgReply, boo
 		}
 	}
 	return tgReply{}, false
+}
+
+// pluginAgentReply runs a prompt-declared command as a fresh agent session —
+// the /agent shape, so the reply arrives async via the queue instead of
+// blocking the poll loop (an LLM turn would blow past pluginTimeout).
+func (s *Server) pluginAgentReply(ctx context.Context, c pluginCommand, arg string) tgReply {
+	provider, note := agentProvider()
+	sess, err := s.newSession(true, provider)
+	if err != nil {
+		return tgReply{Text: "⚠ " + err.Error()}
+	}
+	if err := ensureAgentDir(); err != nil {
+		return tgReply{Text: "⚠ " + err.Error()}
+	}
+	s.clearChats(ctx) // before enqueue: the task's answer must outlive the clear
+	s.enqueue(sess.ID, pluginAgentText(c, arg, s.store))
+	return tgReply{Text: note + "⏳ /" + c.Name + " running (" + provider + ")", DeleteInbound: true}
+}
+
+// pluginAgentText composes the session's first message: the declared prompt,
+// the owner's raw trailing words (not word-split — punctuation matters to a
+// prompt), then the omni context the session can act on: where plan pages
+// live and the scheduled-jobs contract.
+func pluginAgentText(c pluginCommand, arg string, store *Store) string {
+	var b strings.Builder
+	b.WriteString(c.Prompt)
+	if arg != "" {
+		b.WriteString("\n\nOwner's message: " + arg)
+	}
+	if wiki := memoriaWiki(); wiki != "" {
+		fmt.Fprintf(&b, "\n\nPlan pages live at %s — markdown with `status: active|done` frontmatter; edit them with your file tools.",
+			filepath.Join(wiki, plansDir, "<slug>.md"))
+	}
+	b.WriteString("\n\n" + cronPrompt(store))
+	return b.String()
 }
 
 // syncPlugins re-publishes the telegram command menu (built-ins + plugins);

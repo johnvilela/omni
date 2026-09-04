@@ -329,6 +329,24 @@ func TestPluginInstallCommandCollision(t *testing.T) {
 	}
 }
 
+// TestValidateManifestPromptCommands: a command declares exactly one of argv
+// and prompt.
+func TestValidateManifestPromptCommands(t *testing.T) {
+	pluginTestEnv(t)
+	mk := func(c pluginCommand) pluginManifest {
+		return pluginManifest{Name: "pecunia", Commands: []pluginCommand{c}}
+	}
+	if err := validateManifest(mk(pluginCommand{Name: "pecunia_coach", Prompt: "You are the coach."}), "pecunia"); err != nil {
+		t.Fatalf("prompt-only command rejected: %v", err)
+	}
+	if err := validateManifest(mk(pluginCommand{Name: "pecunia_coach", Argv: []string{"pecunia"}, Prompt: "x"}), "pecunia"); err == nil {
+		t.Fatal("argv+prompt accepted")
+	}
+	if err := validateManifest(mk(pluginCommand{Name: "pecunia_coach"}), "pecunia"); err == nil {
+		t.Fatal("command with neither argv nor prompt accepted")
+	}
+}
+
 func TestPluginRemove(t *testing.T) {
 	home := pluginTestEnv(t)
 	script := fakePluginScript(t, fakeManifest)

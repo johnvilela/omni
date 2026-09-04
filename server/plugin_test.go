@@ -87,6 +87,60 @@ func TestPluginCommandUnknown(t *testing.T) {
 	}
 }
 
+// TestPluginAgentText: the composed first message is the declared prompt,
+// the owner's raw trailing words (punctuation intact), the plans directory
+// and the scheduled-jobs contract with the live job list.
+func TestPluginAgentText(t *testing.T) {
+	_, store := newToolsServer(t)
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	if err := os.MkdirAll(filepath.Join(cfg, "memoria", "wiki"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store.AddCron("0 9 * * *", "message", "[pecunia-coach] check in")
+
+	c := pluginCommand{Name: "pecunia_coach", Prompt: "You are the coach."}
+	got := pluginAgentText(c, "spent $12,50 on lunch!", store)
+	if !strings.HasPrefix(got, "You are the coach.") {
+		t.Fatalf("prompt not first: %q", got)
+	}
+	for _, want := range []string{
+		"Owner's message: spent $12,50 on lunch!",
+		filepath.Join(cfg, "memoria", "wiki", "omni-bot", "plans"),
+		"## Scheduled jobs",
+		"[pecunia-coach] check in",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("composed text missing %q: %q", want, got)
+		}
+	}
+	if got := pluginAgentText(c, "", store); strings.Contains(got, "Owner's message:") {
+		t.Fatalf("empty arg still rendered an owner message: %q", got)
+	}
+}
+
+// TestPluginPromptCommandDispatch: a prompt-declared command starts an agent
+// session and queues the composed prompt instead of exec'ing anything.
+func TestPluginPromptCommandDispatch(t *testing.T) {
+	srv, store := newTestServer(t)
+	writePluginFixture(t, "#!/bin/sh\n")
+	manifest := `{"name":"pecunia","version":"0.6.0","description":"finance",` +
+		`"commands":[{"name":"pecunia_coach","description":"coach","prompt":"You are the coach."}]}`
+	if err := os.WriteFile(filepath.Join(pluginsDir(), "pecunia.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir()) // the drain's vendor CLI exec must fail fast
+
+	reply := srv.handleMessage(context.Background(), "/pecunia-coach spent $12, forgot to log")
+	if !strings.Contains(reply.Text, "⏳ /pecunia_coach") {
+		t.Fatalf("prompt dispatch reply = %q", reply.Text)
+	}
+	sess, ok, _ := store.ActiveSession()
+	if !ok || !sess.Agent {
+		t.Fatalf("ActiveSession = %+v, ok %v; want agent session", sess, ok)
+	}
+}
+
 // TestPluginTgCommands: manifests become setMyCommands entries.
 func TestPluginTgCommands(t *testing.T) {
 	writePluginFixture(t, "#!/bin/sh\n")
