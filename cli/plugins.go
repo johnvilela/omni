@@ -40,7 +40,8 @@ type pluginMCP struct {
 type pluginCommand struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Argv        []string `json:"argv"`
+	Argv        []string `json:"argv,omitempty"`
+	Prompt      string   `json:"prompt,omitempty"`
 }
 
 type pluginManifest struct {
@@ -285,8 +286,8 @@ func validateManifest(m pluginManifest, name string) error {
 		if !pluginCmdRe.MatchString(c.Name) {
 			return fmt.Errorf("command %q: names are 1-32 chars of a-z, 0-9 and _", c.Name)
 		}
-		if len(c.Argv) == 0 {
-			return fmt.Errorf("command %q: argv must not be empty", c.Name)
+		if (len(c.Argv) == 0) == (c.Prompt == "") {
+			return fmt.Errorf("command %q: exactly one of argv and prompt", c.Name)
 		}
 		if owner, ok := taken[c.Name]; ok {
 			return fmt.Errorf("command /%s is already taken by %s", c.Name, owner)

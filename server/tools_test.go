@@ -79,6 +79,28 @@ TOOL:cron_add {"schedule":"0 8 * * *","kind":"message","text":"drink water"}`)
 	}
 }
 
+// TestApplyAgentToolsCron: agent replies may manage crons (a prompt-command
+// session creating its reminders); chat-only tools still pass through.
+func TestApplyAgentToolsCron(t *testing.T) {
+	srv, store := newToolsServer(t)
+	out := srv.applyAgentTools(context.Background(), "done\nTOOL:cron_add {\"schedule\":\"0 9 * * *\",\"kind\":\"message\",\"text\":\"[pecunia-coach] check in\"}")
+	if strings.Contains(out, "TOOL:") || !strings.Contains(out, "#1") {
+		t.Fatalf("cron_add via agent = %q", out)
+	}
+	if cs, _ := store.Crons(); len(cs) != 1 || cs[0].Text != "[pecunia-coach] check in" {
+		t.Fatalf("crons = %+v", cs)
+	}
+	if out = srv.applyAgentTools(context.Background(), `TOOL:write_file {"path":"x","content":"y"}`); !strings.Contains(out, "TOOL:write_file") {
+		t.Fatalf("chat-only tool executed in agent mode: %q", out)
+	}
+	if out = srv.applyAgentTools(context.Background(), `TOOL:cron_delete {"id":1}`); !strings.Contains(out, "#1") {
+		t.Fatalf("cron_delete via agent = %q", out)
+	}
+	if cs, _ := store.Crons(); len(cs) != 0 {
+		t.Fatalf("crons after delete = %+v", cs)
+	}
+}
+
 func TestCronPrompt(t *testing.T) {
 	srv, store := newToolsServer(t)
 	p := cronPrompt(srv.store)

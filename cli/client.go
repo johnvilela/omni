@@ -18,10 +18,10 @@ type Channel struct {
 
 // LLM mirrors the server's llm provider status JSON.
 type LLM struct {
-	Name      string `json:"name"`
-	Connected bool   `json:"connected"`
-	Source    string `json:"source"`
-	Default   bool   `json:"default"`
+	Name       string `json:"name"`
+	Connected  bool   `json:"connected"`
+	Source     string `json:"source"`
+	Default    bool   `json:"default"`
 	Model      string `json:"model"`
 	Effort     string `json:"effort"`
 	BudgetNote string `json:"budget_note"`

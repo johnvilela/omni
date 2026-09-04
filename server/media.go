@@ -273,23 +273,31 @@ func (s *Server) analyzeFile(ctx context.Context, path, question string) string 
 	return strings.TrimSpace(reply)
 }
 
-// applyAgentTools executes the TOOL lines honored in agent-session and cron
-// replies: send_file plus task_start. Task-step replies deliberately get only
-// applySendFile (their DONE summary) — a step agent must never start
-// sub-tasks. The vendor CLI has its own real tools; chat file and cron tools
-// never run in agent mode.
+// agentTools are the TOOL lines honored in agent-session and cron replies:
+// task_start plus the cron tools, so a prompt-command session can manage its
+// reminders. The vendor CLI has its own real tools; chat file tools never run
+// in agent mode.
+var agentTools = map[string]bool{"task_start": true, "cron_add": true, "cron_edit": true, "cron_delete": true}
+
+// applyAgentTools executes the agentTools TOOL lines in an agent reply.
+// Task-step replies deliberately get only applySendFile (their DONE summary)
+// — a step agent must never start sub-tasks.
+// ponytail: confirmations replace TOOL lines in omni's history only — the
+// vendor session never learns e.g. the cron ID it just created; a fresh
+// run's cronPrompt listing is the recovery path.
 func (s *Server) applyAgentTools(ctx context.Context, reply string) string {
 	reply = s.applySendFile(ctx, reply)
-	if !strings.Contains(reply, "TOOL:task_start") {
+	if !strings.Contains(reply, "TOOL:") {
 		return reply
 	}
 	lines := strings.Split(reply, "\n")
 	for i, line := range lines {
 		name, args, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if !ok || name != "TOOL:task_start" {
+		tool, isTool := strings.CutPrefix(name, "TOOL:")
+		if !ok || !isTool || !agentTools[tool] {
 			continue
 		}
-		lines[i] = s.runTool(ctx, "", "task_start", args)
+		lines[i] = s.runTool(ctx, "", tool, args)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

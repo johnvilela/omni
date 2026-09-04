@@ -154,7 +154,7 @@ func (s *Server) runTaskLoop(id int64) {
 		case "BLOCKED":
 			s.store.SetTaskStatus(id, "blocked", rest)
 			s.notifyOwner(context.Background(), tgReply{
-				Text: fmt.Sprintf("⛔ task #%d needs you: %s\n\nanswer with: /task #%d <your answer>", id, rest, id),
+				Text:     fmt.Sprintf("⛔ task #%d needs you: %s\n\nanswer with: /task #%d <your answer>", id, rest, id),
 				Keyboard: [][]button{{{Text: "✖ cancel task", CallbackData: fmt.Sprintf("task-cancel:%d", id)}}},
 			})
 			return
