@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type channelStatus struct {
@@ -77,6 +78,7 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 	tg.answer = s.gatedAnswer
 	tg.callback = s.gatedCallback
 	tg.file = s.gatedFile
+	tg.seen = s.trackMessage
 	username, err := tg.GetMe(ctx)
 	if err != nil {
 		return channelStatus{}, http.StatusUnauthorized, err
@@ -96,6 +98,12 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 	s.mu.Unlock()
 	go tg.Poll(pollCtx)
 	go s.refreshPin() // re-attach a persisted dashboard after restart/reconnect
+	// ponytail: tracked ids telegram can no longer delete are pruned here, at
+	// connect, rather than on every message — good enough while restarts are
+	// routine (every update); a periodic sweep if the table ever hurts.
+	if err := s.store.PruneTgMessages(time.Now().Add(-deleteWindow).Unix()); err != nil {
+		log.Printf("clear: prune: %v", err)
+	}
 
 	if err := s.store.SetConnected("telegram", true); err != nil {
 		return channelStatus{}, http.StatusInternalServerError, err

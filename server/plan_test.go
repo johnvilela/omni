@@ -83,7 +83,7 @@ func TestPlanCronDone(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	bin := t.TempDir()
 	fake := `#!/bin/sh
-echo '{"result":"trained today\nPLAN DONE","session_id":"v1"}'
+printf '%s\n' '{"result":"trained today\nPLAN DONE","session_id":"v1"}'
 `
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)

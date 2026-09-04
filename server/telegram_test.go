@@ -54,10 +54,10 @@ func fakeTelegram(t *testing.T, sent chan<- map[string]any, actions, answered ch
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		sent <- body
-		fmt.Fprint(w, `{"ok":true,"result":{}}`)
+		fmt.Fprint(w, `{"ok":true,"result":{"message_id":200}}`)
 	})
-	// edit calls land on sent too, tagged with method so tests can tell
-	for _, m := range []string{"editMessageText", "editMessageReplyMarkup"} {
+	// edit and delete calls land on sent too, tagged with method so tests can tell
+	for _, m := range []string{"editMessageText", "editMessageReplyMarkup", "deleteMessage"} {
 		method := m
 		mux.HandleFunc("/botTOKEN/"+method, func(w http.ResponseWriter, r *http.Request) {
 			var body map[string]any
@@ -164,7 +164,7 @@ func TestTelegramRegisterCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmds, _ := (<-got)["commands"].([]any)
-	want := []string{"new", "agent", "task", "tasks", "sessions", "usage", "context", "crons", "pin", "terminal", "interrupt", "ops", "plan", "memory"}
+	want := []string{"new", "clear", "agent", "task", "tasks", "sessions", "usage", "context", "crons", "pin", "terminal", "interrupt", "ops", "plan", "memory"}
 	if len(cmds) != len(want) {
 		t.Fatalf("registered %d commands; want %d", len(cmds), len(want))
 	}
@@ -486,5 +486,59 @@ func TestTelegramSendChunks(t *testing.T) {
 	}
 	if got != long {
 		t.Fatalf("reassembled chunks != original (len %d vs %d)", len(got), len(long))
+	}
+}
+
+// TestTelegramTracksMessageIDs: the poller reports every inbound message id
+// and every sent message id to the seen hook, so /clear can delete them —
+// except an inbound the reply asked to delete (a sudo password).
+func TestTelegramTracksMessageIDs(t *testing.T) {
+	const updates = `{"update_id":6,"message":{"message_id":5,"chat":{"id":42},"from":{"id":99},"text":"hello"}},` +
+		`{"update_id":7,"message":{"message_id":6,"chat":{"id":42},"from":{"id":99},"text":"secret"}}`
+	sent := make(chan map[string]any, 8)
+	srv := fakeTelegram(t, sent, nil, nil, updates)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tg := NewTelegram(srv.URL, "TOKEN")
+	tg.answer = func(_ context.Context, _ int64, text string) tgReply {
+		if text == "secret" {
+			return tgReply{Text: "ok", DeleteInbound: true}
+		}
+		return tgReply{Text: "hi"}
+	}
+	type seen struct{ chat, msg int64 }
+	seenCh := make(chan seen, 8)
+	tg.seen = func(chat, msg int64) { seenCh <- seen{chat, msg} }
+	go tg.Poll(ctx)
+
+	var got []seen
+	deadline := time.After(3 * time.Second)
+	for len(got) < 3 {
+		select {
+		case s := <-seenCh:
+			got = append(got, s)
+		case <-deadline:
+			t.Fatalf("seen = %v after 3s; want 3 ids", got)
+		}
+	}
+	want := []seen{{42, 5}, {42, 200}, {42, 200}} // inbound 5, reply, reply (inbound 6 deleted, not tracked)
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("seen = %v; want %v", got, want)
+	}
+	select {
+	case s := <-seenCh:
+		t.Fatalf("extra seen %v; a deleted inbound must not be tracked", s)
+	case <-time.After(200 * time.Millisecond):
+	}
+	var deleted bool
+	for len(sent) > 0 {
+		if c := <-sent; c["method"] == "deleteMessage" && c["message_id"] == float64(6) {
+			deleted = true
+		}
+	}
+	if !deleted {
+		t.Fatal("DeleteInbound reply did not delete message 6")
 	}
 }

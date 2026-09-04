@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -402,5 +403,49 @@ func TestStoreConnected(t *testing.T) {
 	defer s2.Close()
 	if got, _ := s2.Connected("telegram"); !got {
 		t.Fatal("Connected = false after reopen, want true")
+	}
+}
+
+// TestStoreTgMessages: tracked telegram ids round-trip in id order, drop by
+// id ceiling on clear (ids tracked mid-clear survive) and by age on prune.
+func TestStoreTgMessages(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	for _, m := range []tgMessage{{3, 30}, {1, 10}, {2, 20}} {
+		if err := s.AddTgMessage(42, m.ID, m.At); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.AddTgMessage(42, 2, 99); err != nil { // duplicate id: ignored
+		t.Fatal(err)
+	}
+	s.AddTgMessage(7, 1, 10) // another chat
+	got, err := s.TgMessages(42)
+	if err != nil || fmt.Sprint(got) != fmt.Sprint([]tgMessage{{1, 10}, {2, 20}, {3, 30}}) {
+		t.Fatalf("TgMessages = %v, %v", got, err)
+	}
+
+	if err := s.DeleteTgMessagesUpTo(42, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.TgMessages(42); fmt.Sprint(got) != fmt.Sprint([]tgMessage{{3, 30}}) {
+		t.Fatalf("after DeleteTgMessagesUpTo(2) = %v; want id 3 only", got)
+	}
+	if got, _ := s.TgMessages(7); len(got) != 1 {
+		t.Fatalf("other chat after delete = %v; want untouched", got)
+	}
+
+	if err := s.PruneTgMessages(20); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.TgMessages(7); len(got) != 0 {
+		t.Fatalf("chat 7 after prune = %v; want empty", got)
+	}
+	if got, _ := s.TgMessages(42); len(got) != 1 {
+		t.Fatalf("chat 42 after prune = %v; want id 3 kept", got)
 	}
 }

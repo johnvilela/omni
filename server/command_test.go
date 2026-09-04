@@ -11,8 +11,8 @@ import (
 func TestCommandNew(t *testing.T) {
 	srv, store := newTestServer(t)
 	reply := srv.handleMessage(context.Background(), "/new")
-	if !strings.Contains(reply.Text, "new session") {
-		t.Fatalf("/new reply = %q", reply.Text)
+	if reply.Text != "" || !reply.DeleteInbound {
+		t.Fatalf("/new reply = %+v; want silence with the command message deleted", reply)
 	}
 	first, ok, _ := store.ActiveSession()
 	if !ok || first.Agent {

@@ -29,7 +29,7 @@ type tgReply struct {
 	Keyboard      [][]button
 	Edit          bool // replace the tapped message (text + keyboard) instead of sending a new one
 	StripKeyboard bool // remove the tapped message's now-stale buttons, then send Text as usual
-	DeleteInbound bool // delete the message that triggered this reply (e.g. a sudo password)
+	DeleteInbound bool // delete the message that triggered this reply (a sudo password, a /clear)
 }
 
 // tgFile is one inbound photo/document's metadata — no bytes; the download
@@ -49,6 +49,25 @@ type Telegram struct {
 	answer   func(ctx context.Context, fromID int64, text string) tgReply // reply to one text message
 	callback func(ctx context.Context, fromID int64, data string) tgReply // reply to one button tap
 	file     func(ctx context.Context, fromID int64, f tgFile) tgReply    // reply to one photo/document message
+	seen     func(chatID, msgID int64)                                    // every message id sent or received, for /clear (nil = untracked)
+}
+
+// track reports one message id to the seen hook; id 0 is a send whose result
+// carried no id (fakes in tests) and is skipped.
+func (t *Telegram) track(chatID, msgID int64) {
+	if t.seen != nil && msgID != 0 {
+		t.seen(chatID, msgID)
+	}
+}
+
+// sentID pulls message_id out of a send result; 0 when it isn't a Message
+// object (fakes answering true) — the send still succeeded.
+func sentID(raw json.RawMessage) int64 {
+	var res struct {
+		MessageID int64 `json:"message_id"`
+	}
+	json.Unmarshal(raw, &res) // best-effort: only the id for tracking
+	return res.MessageID
 }
 
 func NewTelegram(apiBase, token string) *Telegram {
@@ -146,7 +165,8 @@ func (t *Telegram) GetMe(ctx context.Context) (string, error) {
 // user types a slash. Idempotent — reconnecting just re-publishes.
 func (t *Telegram) registerCommands(ctx context.Context) error {
 	return t.call(ctx, "setMyCommands", map[string]any{"commands": []map[string]string{
-		{"command": "new", "description": "start a fresh chat session"},
+		{"command": "new", "description": "start a fresh chat session — clears the chat view"},
+		{"command": "clear", "description": "clear the chat view — deletes recent messages, memory kept"},
 		{"command": "agent", "description": "agent session with tools — /agent [@openai|@claude] task"},
 		{"command": "task", "description": "long checkpointed task — /task <goal> | /task #id <text>"},
 		{"command": "tasks", "description": "list long tasks — pause, resume, cancel"},
@@ -166,11 +186,13 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 // sendReturningID sends one plain message and returns its message id (the
 // chunking send discards it; the pin dashboard needs it to edit later).
 func (t *Telegram) sendReturningID(ctx context.Context, chatID int64, text string) (int64, error) {
-	var res struct {
-		MessageID int64 `json:"message_id"`
+	var raw json.RawMessage
+	if err := t.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text}, &raw); err != nil {
+		return 0, err
 	}
-	err := t.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text}, &res)
-	return res.MessageID, err
+	id := sentID(raw)
+	t.track(chatID, id)
+	return id, nil
 }
 
 // editMessage rewrites one message's text and keyboard in place; nil kb drops
@@ -202,6 +224,12 @@ func (t *Telegram) unpinMessage(ctx context.Context, chatID, msgID int64) error 
 
 func (t *Telegram) deleteMessage(ctx context.Context, chatID, msgID int64) error {
 	return t.call(ctx, "deleteMessage", map[string]any{"chat_id": chatID, "message_id": msgID}, nil)
+}
+
+// deleteMessages deletes up to 100 messages in one call; ids telegram can't
+// find are skipped on its side.
+func (t *Telegram) deleteMessages(ctx context.Context, chatID int64, ids []int64) error {
+	return t.call(ctx, "deleteMessages", map[string]any{"chat_id": chatID, "message_ids": ids}, nil)
 }
 
 // downloadFile resolves a file_id via getFile and streams the bytes to dest.
@@ -276,6 +304,7 @@ func (t *Telegram) upload(ctx context.Context, method, field string, chatID int6
 	if !api.OK {
 		return fmt.Errorf("telegram %s: %s", method, api.Description)
 	}
+	t.track(chatID, sentID(api.Result))
 	return nil
 }
 
@@ -353,6 +382,7 @@ func (t *Telegram) Poll(ctx context.Context) {
 				if from == 0 {
 					from = m.Chat.ID
 				}
+				t.track(m.Chat.ID, m.MessageID)
 				stop := t.typing(ctx, m.Chat.ID)
 				reply := t.file(ctx, from, f)
 				stop()
@@ -371,6 +401,8 @@ func (t *Telegram) Poll(ctx context.Context) {
 			stop()
 			if reply.DeleteInbound {
 				t.deleteMessage(ctx, u.Message.Chat.ID, u.Message.MessageID) // best-effort: keep the sudo password out of history
+			} else {
+				t.track(u.Message.Chat.ID, u.Message.MessageID)
 			}
 			t.send(ctx, u.Message.Chat.ID, reply)
 		}
@@ -390,9 +422,12 @@ func (t *Telegram) send(ctx context.Context, chatID int64, r tgReply) {
 		if i == len(parts)-1 && r.Keyboard != nil {
 			body["reply_markup"] = map[string]any{"inline_keyboard": r.Keyboard}
 		}
-		if err := t.call(ctx, "sendMessage", body, nil); err != nil {
+		var raw json.RawMessage
+		if err := t.call(ctx, "sendMessage", body, &raw); err != nil {
 			log.Printf("telegram: sendMessage: %v", err)
+			continue
 		}
+		t.track(chatID, sentID(raw))
 	}
 }
 

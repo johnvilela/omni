@@ -83,6 +83,15 @@ func OpenStore(path string) (*Store, error) {
 			session_id TEXT NOT NULL,
 			text TEXT NOT NULL
 		)`,
+		// every telegram message id sent or received per chat, so /clear can
+		// delete them (see server/clear.go); rows drop on clear and on the
+		// 48h prune at connect — telegram can't delete older ones anyway
+		`CREATE TABLE IF NOT EXISTS tg_messages (
+			chat_id INTEGER NOT NULL,
+			message_id INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (chat_id, message_id)
+		)`,
 		// pinned status-dashboard message per owner chat (see server/pin.go)
 		`CREATE TABLE IF NOT EXISTS pins (
 			chat_id INTEGER PRIMARY KEY,
@@ -381,6 +390,50 @@ func (s *Store) SetPinMode(mode string) error {
 	return err
 }
 
+// tgMessage is one tracked telegram message: id plus when it was seen, so
+// the clear can skip ids telegram will refuse (older than 48h).
+type tgMessage struct {
+	ID int64
+	At int64
+}
+
+func (s *Store) AddTgMessage(chatID, messageID, at int64) error {
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO tg_messages (chat_id, message_id, created_at) VALUES (?, ?, ?)`,
+		chatID, messageID, at)
+	return err
+}
+
+// TgMessages lists one chat's tracked messages, oldest id first.
+func (s *Store) TgMessages(chatID int64) ([]tgMessage, error) {
+	rows, err := s.db.Query(`SELECT message_id, created_at FROM tg_messages WHERE chat_id = ? ORDER BY message_id`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ms []tgMessage
+	for rows.Next() {
+		var m tgMessage
+		if err := rows.Scan(&m.ID, &m.At); err != nil {
+			return nil, err
+		}
+		ms = append(ms, m)
+	}
+	return ms, rows.Err()
+}
+
+// DeleteTgMessagesUpTo drops one chat's tracked rows with id ≤ maxID —
+// message ids grow per chat, so anything tracked during a clear survives it.
+func (s *Store) DeleteTgMessagesUpTo(chatID, maxID int64) error {
+	_, err := s.db.Exec(`DELETE FROM tg_messages WHERE chat_id = ? AND message_id <= ?`, chatID, maxID)
+	return err
+}
+
+// PruneTgMessages drops every tracked row seen before the cutoff.
+func (s *Store) PruneTgMessages(before int64) error {
+	_, err := s.db.Exec(`DELETE FROM tg_messages WHERE created_at < ?`, before)
+	return err
+}
+
 func (s *Store) SetSessionName(id, name string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET name = ? WHERE id = ?`, name, id)
 	return err
@@ -504,7 +557,7 @@ func (s *Store) DeleteSessionProposals(sessionID string) (int64, error) {
 // failed|cancelled; step counts completed loop iterations; note holds the
 // last progress note, DONE summary, BLOCKED question or failure reason.
 type Task struct {
-	ID, Step          int64
+	ID, Step           int64
 	Goal, Status, Note string
 }
 
