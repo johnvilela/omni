@@ -168,6 +168,25 @@ func route(args []string) (command, error) {
 			return command{name: "config-persona", arg: *p}, nil
 		}
 		return command{}, fmt.Errorf("unknown subcommand %q — try `omni config --help`", args[1])
+	case "plugins":
+		if len(args) == 1 {
+			return command{name: "plugins"}, nil
+		}
+		switch args[1] {
+		case "--help", "-h":
+			return command{name: "help", topic: "plugins"}, nil
+		case "install", "remove":
+			rest := args[2:]
+			if slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
+				return command{name: "help", topic: "plugins"}, nil
+			}
+			what := map[string]string{"install": "<owner/repo>", "remove": "<name>"}[args[1]]
+			if len(rest) != 1 {
+				return command{}, fmt.Errorf("usage: omni plugins %s %s", args[1], what)
+			}
+			return command{name: "plugins-" + args[1], arg: rest[0]}, nil
+		}
+		return command{}, fmt.Errorf("unknown subcommand %q — try `omni plugins --help`", args[1])
 	case "guardian":
 		if len(args) == 1 {
 			return command{name: "guardian-status"}, nil
@@ -661,6 +680,8 @@ func run(args []string) int {
 			fmt.Print(helpConfigPersona())
 		case "pairing":
 			fmt.Print(helpPairing())
+		case "plugins":
+			fmt.Print(helpPlugins())
 		case "guardian":
 			fmt.Print(helpGuardian())
 		default:
@@ -731,6 +752,12 @@ func run(args []string) int {
 		fmt.Println(okStyle.Render("✓") + " revoked " + selectedStyle.Render(cmd.arg))
 	case "config-persona":
 		return runConfigPersona(cmd.arg)
+	case "plugins":
+		return runPlugins(c)
+	case "plugins-install":
+		return runPluginInstall(c, cmd.arg)
+	case "plugins-remove":
+		return runPluginRemove(c, cmd.arg)
 	case "guardian-status":
 		return runGuardianStatus()
 	case "guardian-interval":

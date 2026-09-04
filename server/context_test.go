@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -48,5 +50,23 @@ func TestAgentContext(t *testing.T) {
 	out = agentContext(Session{Agent: true, Provider: "openai", LastCtx: 1000}, nil)
 	if !strings.Contains(out, "window 272.0k") || strings.Contains(out, "skills:") {
 		t.Fatalf("codex render wrong:\n%s", out)
+	}
+}
+
+// TestSkillTokensAgentWorkspace: plugin skills in the agent workspace count
+// beside the user's ~/.claude/skills.
+func TestSkillTokensAgentWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if got := skillTokens(); got != 0 {
+		t.Fatalf("empty skillTokens = %d", got)
+	}
+	dir := filepath.Join(agentDir(), ".claude", "skills", "pec")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: pec\ndescription: finance\n---\nbody"), 0o644)
+	if got := skillTokens(); got == 0 {
+		t.Fatal("agent workspace skills not counted")
 	}
 }

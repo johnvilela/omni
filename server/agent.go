@@ -274,6 +274,11 @@ func parseCodexEvents(out string) (threadID string, u callUsage) {
 // output carries the reply, usage and the session id to resume next turn.
 func runClaudeAgent(ctx context.Context, vendorID, text string) (reply, newVendorID string, u callUsage, err error) {
 	args := []string{"-p", text, "--output-format", "json", "--dangerously-skip-permissions"}
+	// plugin MCP servers (cli/plugins.go writes the file) merge with the
+	// user's own config — unlike chat mode's --strict-mcp-config
+	if mcp := filepath.Join(agentDir(), ".mcp.json"); fileExists(mcp) {
+		args = append(args, "--mcp-config", mcp)
+	}
 	if vendorID != "" {
 		args = append(args, "--resume", vendorID)
 	}
@@ -304,7 +309,9 @@ func runCodexAgent(ctx context.Context, vendorID, text string) (reply, newVendor
 		args = append(args, "resume", vendorID)
 	}
 	args = append(args, "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
-		"--json", "-o", tmp.Name(), text)
+		"--json", "-o", tmp.Name())
+	args = append(args, codexMCPArgs()...) // codex has no project mcp file
+	args = append(args, text)
 	out, err := runCLI(ctx, agentDir(), agentTimeout, "codex", args...)
 	if err != nil {
 		return "", "", callUsage{}, err

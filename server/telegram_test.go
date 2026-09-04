@@ -160,7 +160,7 @@ func TestTelegramRegisterCommands(t *testing.T) {
 	defer srv.Close()
 
 	tg := NewTelegram(srv.URL, "TOKEN")
-	if err := tg.registerCommands(context.Background()); err != nil {
+	if err := tg.registerCommands(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	cmds, _ := (<-got)["commands"].([]any)
@@ -173,6 +173,32 @@ func TestTelegramRegisterCommands(t *testing.T) {
 		if m["command"] != want[i] || m["description"] == "" {
 			t.Fatalf("command %d = %v; want /%s with a description", i, m, want[i])
 		}
+	}
+}
+
+// TestRegisterCommandsPluginsAppended: plugin commands ride after the
+// built-ins in the same setMyCommands publish.
+func TestRegisterCommandsPluginsAppended(t *testing.T) {
+	got := make(chan map[string]any, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/botTOKEN/setMyCommands", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		got <- body
+		fmt.Fprint(w, `{"ok":true,"result":true}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tg := NewTelegram(srv.URL, "TOKEN")
+	extra := []map[string]string{{"command": "pecunia_today", "description": "today summary"}}
+	if err := tg.registerCommands(context.Background(), extra); err != nil {
+		t.Fatal(err)
+	}
+	cmds, _ := (<-got)["commands"].([]any)
+	last := cmds[len(cmds)-1].(map[string]any)
+	if last["command"] != "pecunia_today" || last["description"] != "today summary" {
+		t.Fatalf("last command = %v; want the plugin entry appended", last)
 	}
 }
 

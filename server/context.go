@@ -145,6 +145,9 @@ func skillTokens() int {
 		return 0
 	}
 	files, _ := filepath.Glob(filepath.Join(home, ".claude", "skills", "*", "SKILL.md"))
+	// plugin skills live in the agent workspace (cli/plugins.go installs them)
+	agent, _ := filepath.Glob(filepath.Join(agentDir(), ".claude", "skills", "*", "SKILL.md"))
+	files = append(files, agent...)
 	var tok int
 	for _, f := range files {
 		raw, err := os.ReadFile(f)

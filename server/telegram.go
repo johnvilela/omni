@@ -162,9 +162,10 @@ func (t *Telegram) GetMe(ctx context.Context) (string, error) {
 }
 
 // registerCommands publishes the "/" autocomplete menu clients show when the
-// user types a slash. Idempotent — reconnecting just re-publishes.
-func (t *Telegram) registerCommands(ctx context.Context) error {
-	return t.call(ctx, "setMyCommands", map[string]any{"commands": []map[string]string{
+// user types a slash; extra carries installed plugin commands. Idempotent —
+// reconnecting just re-publishes.
+func (t *Telegram) registerCommands(ctx context.Context, extra []map[string]string) error {
+	return t.call(ctx, "setMyCommands", map[string]any{"commands": append([]map[string]string{
 		{"command": "new", "description": "start a fresh chat session — clears the chat view"},
 		{"command": "clear", "description": "clear the chat view — deletes recent messages, memory kept"},
 		{"command": "agent", "description": "agent session with tools — /agent [@openai|@claude] task"},
@@ -180,7 +181,7 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 		{"command": "ops", "description": "quick actions — status, doctor, logs, disk, restart, update"},
 		{"command": "plan", "description": "plan a goal — interview, approve, saved to the wiki"},
 		{"command": "memory", "description": "save one durable fact to core memory — /memory <text>"},
-	}}, nil)
+	}, extra...)}, nil)
 }
 
 // sendReturningID sends one plain message and returns its message id (the

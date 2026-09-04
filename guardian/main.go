@@ -350,7 +350,17 @@ func checkUpdates(repos []string) (r checkResult, omniTag string, definitive boo
 			}
 			continue
 		}
-		stale = append(stale, fmt.Sprintf("%s %s → %s", bin, cur, latest))
+		entry := fmt.Sprintf("%s %s → %s", bin, cur, latest)
+		// a binary installed as an omni plugin has its own reinstall command
+		if data, err := os.ReadFile(filepath.Join(dataDir(), "plugins", bin+".json")); err == nil {
+			var m struct {
+				Repo string `json:"repo"`
+			}
+			if json.Unmarshal(data, &m) == nil && m.Repo != "" {
+				entry += " — omni plugins install " + m.Repo
+			}
+		}
+		stale = append(stale, entry)
 	}
 	if len(stale) > 0 {
 		return checkResult{name: "updates", detail: strings.Join(stale, ", ") + " — rerun scripts/install.sh"}, omniTag, true

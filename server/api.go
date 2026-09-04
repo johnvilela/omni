@@ -83,7 +83,7 @@ func (s *Server) ConnectTelegram(ctx context.Context, reqToken string) (channelS
 	if err != nil {
 		return channelStatus{}, http.StatusUnauthorized, err
 	}
-	if err := tg.registerCommands(ctx); err != nil {
+	if err := tg.registerCommands(ctx, pluginTgCommands()); err != nil {
 		log.Printf("telegram: setMyCommands: %v", err) // best-effort: menu only
 	}
 
@@ -212,6 +212,10 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, s.listLLMModels(r.Context(), p))
+	})
+	mux.HandleFunc("POST /plugins/sync", func(w http.ResponseWriter, r *http.Request) {
+		n, published := s.syncPlugins(r.Context())
+		writeJSON(w, http.StatusOK, map[string]any{"commands": n, "published": published})
 	})
 	mux.HandleFunc("POST /llm/{provider}/connect", func(w http.ResponseWriter, r *http.Request) {
 		p := r.PathValue("provider")

@@ -30,6 +30,7 @@ func helpText() string {
 		row("omni llm", "manage llm providers (openai, claude, gemini)") +
 		row("omni pairing", "control who may talk to the bot") +
 		row("omni config", "tune omni's behavior (reply persona)") +
+		row("omni plugins", "install and manage plugins (mcp, skills, telegram commands)") +
 		row("omni guardian", "watchdog status, check interval and on/off") +
 		row("omni help", "show this help (also: omni --help, omni -h)") +
 		"\n" + helpStyle.Render("      run `omni <command> --help` for flags, subcommands and examples") + "\n" +
@@ -52,6 +53,20 @@ func helpDoctor() string {
 		helpStyle.Render("      sections: install, config, services, server, recent errors.\n"+
 			"      works with the server down — that's when you need it.\n"+
 			"      exits 1 when any check fails") + "\n\n"
+}
+
+func helpPlugins() string {
+	return "\n" + titleStyle.Render("  USAGE") + "\n\n" +
+		"      " + cmdStyle.Render("omni plugins [install | remove]") + "\n\n" +
+		titleStyle.Render("  SUBCOMMANDS") + "\n\n" +
+		row("omni plugins", "list installed plugins — pick one to remove") +
+		row("omni plugins install <owner/repo>", "install a plugin from its GitHub latest release") +
+		row("omni plugins remove <name>", "remove an installed plugin") +
+		"\n" + titleStyle.Render("  EXAMPLE") + "\n\n" +
+		"      " + cmdStyle.Render("omni plugins install johnvilela/pecunia") + "\n\n" +
+		helpStyle.Render("      a plugin is one Go binary answering `omni-manifest` (see PLUGINS.md).\n"+
+			"      install wires its mcp server + skills into the agent workspace and\n"+
+			"      enables its telegram commands; re-running install upgrades it") + "\n\n"
 }
 
 func helpPairing() string {

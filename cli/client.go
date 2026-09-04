@@ -143,6 +143,12 @@ func (c *Client) LLMModels(name string) ([]string, error) {
 	return ms, err
 }
 
+// SyncPlugins tells a running server to re-publish the telegram command menu
+// after a plugin install/remove; callers treat failure as best-effort.
+func (c *Client) SyncPlugins() error {
+	return c.do(http.MethodPost, "/plugins/sync", nil, nil)
+}
+
 func (c *Client) ConnectLLM(name, key string) (LLM, error) {
 	var l LLM
 	err := c.do(http.MethodPost, "/llm/"+name+"/connect", map[string]string{"key": key}, &l)

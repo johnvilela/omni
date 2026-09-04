@@ -79,6 +79,13 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 	case "/memory":
 		return s.handleMemory(arg)
 	}
+	// installed plugin commands come after the built-ins (which always win)
+	// and before the LLM fall-through, so unknown slash text still chats
+	if strings.HasPrefix(cmd, "/") {
+		if r, ok := s.pluginReply(ctx, cmd, arg); ok {
+			return r
+		}
+	}
 	if pick, rest, ok := cutAtProvider(text); ok {
 		return s.atProvider(pick, rest)
 	}

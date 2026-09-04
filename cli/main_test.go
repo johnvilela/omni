@@ -50,6 +50,13 @@ func TestRoute(t *testing.T) {
 		{[]string{"config", "persona"}, "config-persona", "", "", false},
 		{[]string{"config", "persona", "--help"}, "help", "", "config-persona", false},
 		{[]string{"config", "junk"}, "", "", "", true},
+		{[]string{"plugins"}, "plugins", "", "", false},
+		{[]string{"plugins", "--help"}, "help", "", "plugins", false},
+		{[]string{"plugins", "-h"}, "help", "", "plugins", false},
+		{[]string{"plugins", "install", "--help"}, "help", "", "plugins", false},
+		{[]string{"plugins", "install"}, "", "", "", true},
+		{[]string{"plugins", "remove"}, "", "", "", true},
+		{[]string{"plugins", "junk"}, "", "", "", true},
 		{[]string{"pairing"}, "pairing-list", "", "", false},
 		{[]string{"pairing", "--help"}, "help", "", "pairing", false},
 		{[]string{"pairing", "-h"}, "help", "", "pairing", false},
@@ -82,6 +89,14 @@ func TestRoute(t *testing.T) {
 		if err == nil && (cmd.name != c.name || cmd.channel != c.channel || cmd.topic != c.topic) {
 			t.Errorf("route(%v) = %+v, want {%s %s %s}", c.args, cmd, c.name, c.channel, c.topic)
 		}
+	}
+
+	// plugins install/remove carry the repo / name in cmd.arg
+	if cmd, err := route([]string{"plugins", "install", "johnvilela/pecunia"}); err != nil || cmd.name != "plugins-install" || cmd.arg != "johnvilela/pecunia" {
+		t.Errorf("route(plugins install) = %+v, %v", cmd, err)
+	}
+	if cmd, err := route([]string{"plugins", "remove", "pecunia"}); err != nil || cmd.name != "plugins-remove" || cmd.arg != "pecunia" {
+		t.Errorf("route(plugins remove) = %+v, %v", cmd, err)
 	}
 
 	// approve/revoke carry the code / user id in cmd.arg

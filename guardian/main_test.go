@@ -405,3 +405,32 @@ func TestRunUpdateUnhealthyRollsBack(t *testing.T) {
 		t.Fatalf("report = %q; want the rollback notice", *report)
 	}
 }
+
+// TestCheckUpdatesPluginHint: a stale binary installed as an omni plugin gets
+// its reinstall command as the fix hint instead of the generic install.sh tail.
+func TestCheckUpdatesPluginHint(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"tag_name":"v9.9.9"}`)
+	}))
+	defer fake.Close()
+	t.Setenv("OMNI_GITHUB_API", fake.URL)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'pecunia 0.1.0'\n"
+	if err := os.WriteFile(filepath.Join(bin, "pecunia"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	if err := os.MkdirAll(filepath.Join(dataDir(), "plugins"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	snap := `{"name":"pecunia","repo":"johnvilela/pecunia"}`
+	if err := os.WriteFile(filepath.Join(dataDir(), "plugins", "pecunia.json"), []byte(snap), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, _, ok := checkUpdates([]string{"johnvilela/pecunia"})
+	if !ok || r.ok || !strings.Contains(r.detail, "omni plugins install johnvilela/pecunia") {
+		t.Fatalf("checkUpdates = %+v, %v; want the plugin reinstall hint", r, ok)
+	}
+}

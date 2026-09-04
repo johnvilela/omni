@@ -268,3 +268,64 @@ func TestAgentAnswerClaudeError(t *testing.T) {
 		t.Fatalf("error reply = %q; want ⚠ notice with the error text", reply)
 	}
 }
+
+// TestAgentAnswerClaudeMCPConfig: a plugin-written agent workspace .mcp.json
+// rides every claude agent turn via --mcp-config (merges with user config).
+func TestAgentAnswerClaudeMCPConfig(t *testing.T) {
+	srv, store := newLLMTestServer(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	argsFile, _ := writeAgentFakes(t)
+	if err := os.MkdirAll(agentDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(agentDir(), ".mcp.json")
+	if err := os.WriteFile(mcp, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store.AddSession("s1", true, "claude")
+	store.SetActiveSession("s1")
+
+	sess, _, _ := store.Session("s1")
+	if reply := srv.agentAnswer(context.Background(), sess, "hi"); reply != "pong" {
+		t.Fatalf("reply = %q", reply)
+	}
+	want := []string{"-p", "hi", "--output-format", "json", "--dangerously-skip-permissions", "--mcp-config", mcp}
+	if got := readLines(t, argsFile); !slices.Equal(got, want) {
+		t.Fatalf("claude args = %q; want %q", got, want)
+	}
+}
+
+// TestAgentAnswerCodexMCPOverrides: installed plugin MCP servers reach codex
+// as -c mcp_servers.* overrides with the absolute binary path.
+func TestAgentAnswerCodexMCPOverrides(t *testing.T) {
+	srv, store := newLLMTestServer(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	argsFile, _ := writeAgentFakes(t)
+	if err := os.MkdirAll(pluginsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"name":"pecunia","mcp":{"command":"pecunia","args":["mcp"]}}`
+	if err := os.WriteFile(filepath.Join(pluginsDir(), "pecunia.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(home, ".local", "bin")
+	os.MkdirAll(bin, 0o755)
+	os.WriteFile(filepath.Join(bin, "pecunia"), []byte("#!/bin/sh\n"), 0o755)
+	store.AddSession("s1", true, "openai")
+	store.SetActiveSession("s1")
+
+	sess, _, _ := store.Session("s1")
+	if reply := srv.agentAnswer(context.Background(), sess, "hi"); reply != "pong" {
+		t.Fatalf("reply = %q", reply)
+	}
+	args := readLines(t, argsFile)
+	wantCmd := `mcp_servers.pecunia.command="` + filepath.Join(bin, "pecunia") + `"`
+	if !slices.Contains(args, wantCmd) || !slices.Contains(args, `mcp_servers.pecunia.args=["mcp"]`) {
+		t.Fatalf("codex args = %q; want %q and the args array", args, wantCmd)
+	}
+	if args[len(args)-1] != "hi" {
+		t.Fatalf("prompt not last: %q", args)
+	}
+}
