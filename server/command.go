@@ -65,6 +65,8 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		return s.listCrons()
 	case "/pin":
 		return s.handlePin(ctx, arg)
+	case "/interrupt":
+		return s.handleInterrupt() // outside terminal mode: ^C a running "$" one-shot
 	}
 	if pick, rest, ok := cutAtProvider(text); ok {
 		return s.atProvider(pick, rest)

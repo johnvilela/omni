@@ -2,4 +2,4 @@
 // binaries. Bump it here when anything ships.
 package version
 
-const Version = "v0.18.1"
+const Version = "v0.20.0"

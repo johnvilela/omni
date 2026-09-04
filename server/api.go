@@ -42,9 +42,11 @@ type Server struct {
 	taskWorkers map[int64]int                // taskID → fan-out workers currently running
 	agentSem    chan struct{}                // global cap on concurrent one-shot agent runs
 
-	termMu      sync.Mutex
-	term        *termSession // /terminal root shell; nil = not in terminal mode
-	termPending *termPending // awaiting the next message as the sudo password
+	termMu        sync.Mutex
+	term          *termSession       // /terminal root shell; nil = not in terminal mode
+	termPending   *termPending       // awaiting the next message as the sudo password
+	termCwd       string             // display cwd for the pin indicator (last sentinel)
+	oneShotCancel context.CancelFunc // running "$" one-shot's ^C; nil = none
 }
 
 func NewServer(store *Store, telegramAPIBase string) *Server {

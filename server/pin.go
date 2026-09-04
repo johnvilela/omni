@@ -106,6 +106,11 @@ func (s *Server) renderPin(full bool) (string, error) {
 	if len(tasks) > 0 {
 		line += fmt.Sprintf(" · %d tasks", len(tasks))
 	}
+	s.termMu.Lock()
+	if s.term != nil {
+		line = "🖥 TERMINAL · " + shortPath(s.termCwd) + "\n" + line
+	}
+	s.termMu.Unlock()
 	if !full {
 		return line, nil
 	}
@@ -138,8 +143,13 @@ func (s *Server) renderPin(full bool) (string, error) {
 // refreshPin re-renders and edits the pinned dashboard in place, best-effort.
 // Serialized by pinMu; every trigger renders current state, so bursts
 // coalesce into no-op edits caught by the pinLast dedupe. Lock order is
-// strictly pinMu → (qmu | s.mu | taskMu | store), never reversed.
+// strictly pinMu → (qmu | s.mu | taskMu | termMu | store), never reversed —
+// so never call refreshPin while holding termMu (use go s.refreshPin() after
+// the unlock).
 func (s *Server) refreshPin() {
+	if s.store == nil { // zero-value Server in tests
+		return
+	}
 	s.pinMu.Lock()
 	defer s.pinMu.Unlock()
 	pins, err := s.store.Pins()

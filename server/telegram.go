@@ -155,7 +155,8 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 		{"command": "context", "description": "context usage of the active session — tokens per source"},
 		{"command": "crons", "description": "list scheduled jobs — tap to delete"},
 		{"command": "pin", "description": "toggle pinned status dashboard — /pin [full|clean]"},
-		{"command": "terminal", "description": "shell mode — run commands on this PC as root (/exit to leave)"},
+		{"command": "terminal", "description": "shell mode — run commands on this PC as you (/exit to leave)"},
+		{"command": "interrupt", "description": "^C the running command — /terminal or $ one-shot"},
 	}}, nil)
 }
 
