@@ -9,3 +9,5 @@ On the dev machine (Arch), `/bin/sh` is a symlink to bash, whose `echo` prints b
 Fix: replace `echo '...'` with `printf '%s\n' '...'` in the script generator — `printf`'s `%s` argument is never escape-expanded by any POSIX shell, so it behaves the same under dash and bash.
 
 Rule of thumb: any test fixture that fakes a CLI as a shell script and embeds a string containing backslash escapes (JSON, regex, etc.) must build the script with `printf '%s\n'`, never `echo` — a dev machine's `/bin/sh` being bash hides a divergence that Ubuntu CI's dash (or any POSIX-strict `/bin/sh`) will hit.
+
+Related: [[gotchas/dash-echo-expands-backslash-n]] — the same divergence hit again independently in `TestPlanCronDone` (PR #1, on a `/clear` feature branch). See [[sessions/4be65f5a-04fb-41a7-bc31-a0ae7a908264]].

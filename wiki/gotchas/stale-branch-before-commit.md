@@ -1,0 +1,9 @@
+---
+tags: [gotcha, git, branch, workflow]
+---
+
+omni commits straight to `master` (no feature-branch workflow, no branch-protection ruleset — see [[install]]). Hit while building the plugin system (see [[sessions/15ca4393-95d8-49df-8671-ec8bc9b3bfc1]]): the multi-hour feature was implemented and `/git-commit`'d as `5abe2cb`, but the working tree had been sitting on `claude/telegram-clear-messages-w189jl` the whole time — a branch left checked out from an earlier, unrelated session that had fixed CI for the `/clear` PR (see [[sessions/4be65f5a-04fb-41a7-bc31-a0ae7a908264]]). Nothing in the session flagged this: exploration, planning, and implementation all ran without ever checking `git branch --show-current`.
+
+The user caught it after the commit: "You did this changes on other branch but the main. Move the plugin features into the main directly." Fixing it required an extra round trip: `git fetch origin` first (which revealed PR #1 had *already merged* and released as v0.23.0, so local `master` was itself stale), `git branch -f master origin/master` + switch, `git cherry-pick 5abe2cb` onto the fresh master (applied cleanly as `bda6914`, full suite re-verified green), and resetting the stale branch back to its own origin tip so it no longer carried the plugin commit. Recoverable here only because the wrong-branch commit had never been pushed.
+
+**Rule of thumb**: before running `/git-commit` for a feature built over a long session in this project, confirm `git branch --show-current` is `master` and that it isn't behind `origin/master` — especially when a session's working tree may have been inherited from an earlier session's branch checkout (a phone session, a PR fix, a `/compact` boundary) rather than started fresh. A `git status --short --branch` or `git fetch && git log master..origin/master` check up front is cheaper than a post-commit cherry-pick.
