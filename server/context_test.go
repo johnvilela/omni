@@ -26,8 +26,8 @@ func TestChatContext(t *testing.T) {
 }
 
 func TestAgentContext(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())          // no ~/.claude files
-	t.Setenv("XDG_DATA_HOME", t.TempDir()) // no workspace seeds
+	t.Setenv("HOME", t.TempDir())                            // no ~/.claude files
+	t.Setenv("XDG_DATA_HOME", t.TempDir())                   // no workspace seeds
 	history := []Message{{Content: strings.Repeat("x", 80)}} // 20 tok
 
 	// measured session: remainder = real total − estimates
