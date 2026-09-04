@@ -22,12 +22,12 @@ func TestApplyTools(t *testing.T) {
 	srv, store := newToolsServer(t)
 
 	// no tool line: passthrough untouched
-	if got := srv.applyTools(context.Background(), "just prose"); got != "just prose" {
+	if got := srv.applyTools(context.Background(), "", "just prose"); got != "just prose" {
 		t.Fatalf("passthrough = %q", got)
 	}
 
 	// add
-	got := srv.applyTools(context.Background(), `Sure!
+	got := srv.applyTools(context.Background(), "", `Sure!
 TOOL:cron_add {"schedule":"0 8 * * *","kind":"message","text":"drink water"}`)
 	if !strings.Contains(got, "Sure!") || !strings.Contains(got, "#1") || !strings.Contains(got, "drink water") {
 		t.Fatalf("add reply = %q", got)
@@ -37,12 +37,12 @@ TOOL:cron_add {"schedule":"0 8 * * *","kind":"message","text":"drink water"}`)
 	}
 
 	// invalid schedule: error line, nothing stored
-	got = srv.applyTools(context.Background(), `TOOL:cron_add {"schedule":"99 8 * * *","kind":"message","text":"x"}`)
+	got = srv.applyTools(context.Background(), "", `TOOL:cron_add {"schedule":"99 8 * * *","kind":"message","text":"x"}`)
 	if !strings.Contains(got, "⚠") {
 		t.Fatalf("invalid schedule reply = %q", got)
 	}
 	// invalid kind
-	got = srv.applyTools(context.Background(), `TOOL:cron_add {"schedule":"0 8 * * *","kind":"nuke","text":"x"}`)
+	got = srv.applyTools(context.Background(), "", `TOOL:cron_add {"schedule":"0 8 * * *","kind":"nuke","text":"x"}`)
 	if !strings.Contains(got, "⚠") {
 		t.Fatalf("invalid kind reply = %q", got)
 	}
@@ -51,30 +51,30 @@ TOOL:cron_add {"schedule":"0 8 * * *","kind":"message","text":"drink water"}`)
 	}
 
 	// edit
-	got = srv.applyTools(context.Background(), `TOOL:cron_edit {"id":1,"schedule":"30 8 * * *","kind":"message","text":"hydrate"}`)
+	got = srv.applyTools(context.Background(), "", `TOOL:cron_edit {"id":1,"schedule":"30 8 * * *","kind":"message","text":"hydrate"}`)
 	if !strings.Contains(got, "#1") {
 		t.Fatalf("edit reply = %q", got)
 	}
 	if cs, _ := store.Crons(); cs[0].Text != "hydrate" || cs[0].Schedule != "30 8 * * *" {
 		t.Fatalf("crons after edit = %+v", cs)
 	}
-	if got = srv.applyTools(context.Background(), `TOOL:cron_edit {"id":99,"schedule":"0 8 * * *","kind":"message","text":"x"}`); !strings.Contains(got, "⚠") {
+	if got = srv.applyTools(context.Background(), "", `TOOL:cron_edit {"id":99,"schedule":"0 8 * * *","kind":"message","text":"x"}`); !strings.Contains(got, "⚠") {
 		t.Fatalf("edit unknown = %q", got)
 	}
 
 	// delete
-	if got = srv.applyTools(context.Background(), `TOOL:cron_delete {"id":1}`); !strings.Contains(got, "#1") {
+	if got = srv.applyTools(context.Background(), "", `TOOL:cron_delete {"id":1}`); !strings.Contains(got, "#1") {
 		t.Fatalf("delete reply = %q", got)
 	}
 	if cs, _ := store.Crons(); len(cs) != 0 {
 		t.Fatalf("crons after delete = %+v", cs)
 	}
-	if got = srv.applyTools(context.Background(), `TOOL:cron_delete {"id":1}`); !strings.Contains(got, "⚠") {
+	if got = srv.applyTools(context.Background(), "", `TOOL:cron_delete {"id":1}`); !strings.Contains(got, "⚠") {
 		t.Fatalf("delete gone = %q", got)
 	}
 
 	// a genuinely unknown tool still errs (file tools live in media_test.go)
-	if got = srv.applyTools(context.Background(), `TOOL:nope {"x":1}`); got != "⚠ unknown tool nope" {
+	if got = srv.applyTools(context.Background(), "", `TOOL:nope {"x":1}`); got != "⚠ unknown tool nope" {
 		t.Fatalf("unknown tool = %q", got)
 	}
 }

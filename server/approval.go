@@ -18,7 +18,8 @@ import (
 // approval; read_file and send_file stay free. task_start is gated because it
 // spawns hours of full-permission agent runs.
 var defaultApprovalTools = []string{"write_file", "edit_file", "delete_file",
-	"cron_add", "cron_edit", "cron_delete", "analyze_file", "task_start"}
+	"cron_add", "cron_edit", "cron_delete", "analyze_file", "task_start",
+	"plan_save", "plan_start", "memory_save"}
 
 // gatedTools is the effective set needing approval: approval_tools (default
 // set when unset) minus approval_skip; nil when approvals is "off".
@@ -164,7 +165,10 @@ func (s *Server) runProposal(p Proposal) {
 	ctx := context.Background()
 	stop := s.typingOwner(ctx)
 	defer stop()
-	res := s.applyTools(ctx, toolLines(p.Reply))
+	res := s.applyTools(ctx, p.SessionID, toolLines(p.Reply))
+	if strings.Contains(p.Reply, "TOOL:plan_save") {
+		s.store.SetSessionPlan(p.SessionID, false) // best-effort; interview over
+	}
 	s.store.AddMessage(p.SessionID, "assistant",
 		fmt.Sprintf("✅ owner approved proposal #%d — executed:\n%s", p.ID, res), time.Now().Unix())
 	s.notifyOwner(ctx, tgReply{Text: res})

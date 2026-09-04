@@ -298,7 +298,7 @@ func TestTaskStartTool(t *testing.T) {
 	if names := gatedNames("TOOL:task_start {\"goal\":\"x\"}"); len(names) != 1 || names[0] != "task_start" {
 		t.Fatalf("gatedNames = %q; want task_start gated", names)
 	}
-	out := srv.runTool(context.Background(), "task_start", `{"goal":"from chat"}`)
+	out := srv.runTool(context.Background(), "", "task_start", `{"goal":"from chat"}`)
 	if !strings.Contains(out, "⚙ task #1 started") {
 		t.Fatalf("runTool = %q; want start confirmation", out)
 	}
@@ -308,7 +308,7 @@ func TestTaskStartTool(t *testing.T) {
 	}
 	waitTask(t, store, 1, "done")
 	waitTask(t, store, 2, "done")
-	if out := srv.runTool(context.Background(), "task_start", `{"goal":""}`); !strings.Contains(out, "⚠") {
+	if out := srv.runTool(context.Background(), "", "task_start", `{"goal":""}`); !strings.Contains(out, "⚠") {
 		t.Fatalf("empty goal = %q; want refusal", out)
 	}
 }

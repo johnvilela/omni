@@ -167,6 +167,10 @@ func (s *Server) fireCron(ctx context.Context, c Cron) {
 		// same trust domain as agent sessions: scheduled runs can attach files
 		// and start long tasks
 		text = s.applyAgentTools(ctx, strings.TrimSpace(reply))
+		if planDone(text) {
+			s.store.DeleteCron(c.ID) // best-effort; the page already says status: done
+			text += "\n\n✅ plan complete — daily job removed"
+		}
 	default: // "message"
 		text = "⏰ " + c.Text
 	}

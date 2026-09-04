@@ -158,6 +158,8 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 		{"command": "terminal", "description": "shell mode — run commands on this PC as you (/exit to leave)"},
 		{"command": "interrupt", "description": "^C the running command — /terminal or $ one-shot"},
 		{"command": "ops", "description": "quick actions — status, doctor, logs, disk, restart, update"},
+		{"command": "plan", "description": "plan a goal — interview, approve, saved to the wiki"},
+		{"command": "memory", "description": "save one durable fact to core memory — /memory <text>"},
 	}}, nil)
 }
 

@@ -19,6 +19,8 @@ type Session struct {
 	VendorSessionID   string // agent sessions only: the CLI's session to --resume
 	LastCtx           int64  // agent sessions only: context tokens reported on the last turn
 	Unread            string // answers finished while another session was active; delivered on resume
+	Plan              bool   // /plan interview in progress: planContract rides the prompt
+	Themes            string // comma-joined core-memory themes loaded into this session
 }
 
 // Message is one turn of a session.
@@ -201,7 +203,11 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 	if wiki != "" {
 		memory = readMemory(wiki)
 	}
-	persona := readPersona() + "\n\n" + cronPrompt(s.store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(s.store)
+	persona := readPersona() + "\n\n" + cronPrompt(s.store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(s.store) +
+		"\n\n" + plansPrompt() + "\n\n" + corePrompt(wiki, sess)
+	if sess.Plan {
+		persona += "\n\n" + planContract()
+	}
 	budget, _ := chatBudget(s.chatProvider(sess))
 	prompt, dropped := composePrompt(persona, memory, history, text, budget)
 	reply, err := s.answerWith(ctx, sess.Provider, prompt)
@@ -215,8 +221,26 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 	if len(gatedNames(reply)) > 0 {
 		return "", s.proposeTools(ctx, sess, reply)
 	}
+	// a planning question with tap options: park the raw turn in history and
+	// push the keyboard out-of-band, like a proposal (gate wins when both
+	// appear — the check above ran first)
+	if q, opts, ok := parseAsk(reply); ok {
+		if _, err := s.store.AddMessage(sess.ID, "assistant", reply, time.Now().Unix()); err != nil {
+			return "", err
+		}
+		var kb [][]button
+		for _, o := range opts {
+			kb = append(kb, []button{{Text: o, CallbackData: "opt:" + truncBytes(o, 60)}})
+		}
+		s.notifyOwner(ctx, tgReply{Text: askVisible(reply, q), Keyboard: kb})
+		return "", nil
+	}
+	planSaved := sess.Plan && strings.Contains(reply, "TOOL:plan_save") // approvals-off path
 	readRan := strings.Contains(reply, "TOOL:read_file")
-	reply = s.applyTools(ctx, reply) // history keeps confirmations, not TOOL lines
+	reply = s.applyTools(ctx, sess.ID, reply) // history keeps confirmations, not TOOL lines
+	if planSaved {
+		s.store.SetSessionPlan(sess.ID, false) // best-effort; interview over
+	}
 	visible := reply
 	if readRan {
 		// one follow-up round so read_file content is used this turn, not
@@ -231,7 +255,7 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 				s.store.AddMessage(sess.ID, "assistant", reply, time.Now().Unix())
 				return "", s.proposeTools(ctx, sess, more)
 			}
-			visible = s.applyTools(ctx, more)
+			visible = s.applyTools(ctx, sess.ID, more)
 			reply += "\n\n" + visible
 		}
 	}

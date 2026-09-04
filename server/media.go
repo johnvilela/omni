@@ -289,7 +289,7 @@ func (s *Server) applyAgentTools(ctx context.Context, reply string) string {
 		if !ok || name != "TOOL:task_start" {
 			continue
 		}
-		lines[i] = s.runTool(ctx, "task_start", args)
+		lines[i] = s.runTool(ctx, "", "task_start", args)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

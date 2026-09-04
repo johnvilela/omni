@@ -50,7 +50,9 @@ func OpenStore(path string) (*Store, error) {
 			provider TEXT NOT NULL DEFAULT '',
 			vendor_session_id TEXT NOT NULL DEFAULT '',
 			last_ctx INTEGER NOT NULL DEFAULT 0,
-			unread TEXT NOT NULL DEFAULT ''
+			unread TEXT NOT NULL DEFAULT '',
+			plan INTEGER NOT NULL DEFAULT 0,
+			themes TEXT NOT NULL DEFAULT ''
 		)`,
 		// one-row pointer to the active session; empty means "newest wins"
 		`CREATE TABLE IF NOT EXISTS active (
@@ -129,6 +131,8 @@ func OpenStore(path string) (*Store, error) {
 		`ALTER TABLE sessions ADD COLUMN vendor_session_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN last_ctx INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN unread TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN plan INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN themes TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(ddl); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
@@ -234,9 +238,9 @@ func (s *Store) ActiveSession() (Session, bool, error) {
 // Session looks one session up by id; false means it doesn't exist.
 func (s *Store) Session(id string) (Session, bool, error) {
 	var sess Session
-	err := s.db.QueryRow(`SELECT id, name, consolidated_until, agent, provider, vendor_session_id, last_ctx, unread
+	err := s.db.QueryRow(`SELECT id, name, consolidated_until, agent, provider, vendor_session_id, last_ctx, unread, plan, themes
 		FROM sessions WHERE id = ?`, id).
-		Scan(&sess.ID, &sess.Name, &sess.ConsolidatedUntil, &sess.Agent, &sess.Provider, &sess.VendorSessionID, &sess.LastCtx, &sess.Unread)
+		Scan(&sess.ID, &sess.Name, &sess.ConsolidatedUntil, &sess.Agent, &sess.Provider, &sess.VendorSessionID, &sess.LastCtx, &sess.Unread, &sess.Plan, &sess.Themes)
 	if err == sql.ErrNoRows {
 		return Session{}, false, nil
 	}
@@ -261,6 +265,20 @@ func (s *Store) SetActiveSession(id string) error {
 // "" means the default llm.
 func (s *Store) SetSessionProvider(id, provider string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET provider = ? WHERE id = ?`, provider, id)
+	return err
+}
+
+// SetSessionPlan toggles planning mode: the /plan interview contract is
+// injected while set, cleared when a plan_save executes.
+func (s *Store) SetSessionPlan(id string, v bool) error {
+	_, err := s.db.Exec(`UPDATE sessions SET plan = ? WHERE id = ?`, v, id)
+	return err
+}
+
+// SetSessionThemes stores the session's loaded core-memory themes
+// (comma-joined); their facts ride every following prompt.
+func (s *Store) SetSessionThemes(id, themes string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET themes = ? WHERE id = ?`, themes, id)
 	return err
 }
 

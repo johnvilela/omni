@@ -33,7 +33,7 @@ func TestCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 20 usable tokens on top of the constant tool-section overhead
-	overhead := estTokens("\n\n" + cronPrompt(store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(store))
+	overhead := estTokens("\n\n" + cronPrompt(store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(store) + "\n\n" + plansPrompt() + "\n\n" + corePrompt(memoriaWiki(), Session{}))
 	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"),
 		[]byte(fmt.Sprintf("token_budget: %d\n", overhead+20)), 0o600); err != nil {
 		t.Fatal(err)
@@ -180,5 +180,78 @@ func TestMemoryReadWrite(t *testing.T) {
 	}
 	if got := readMemory(wiki); got != "owner likes go" {
 		t.Fatalf("readMemory = %q; want body only", got)
+	}
+}
+
+// TestMemoryCommand walks the /memory path: condense in the background, park
+// as a proposal, approval appends to the theme page; the theme index rides
+// every prompt but the facts only after memory_load (general always rides).
+func TestMemoryCommand(t *testing.T) {
+	srv, store, rec, calls := newApprovalTestServer(t)
+	wiki := mkMemoriaWiki(t)
+	sess := seedSession(t, srv)
+
+	rec.reply = "family|Owner's son is named Theo"
+	if r := srv.handleMessage(context.Background(), "/memory my son is named Theo"); !strings.Contains(r.Text, "condensing") {
+		t.Fatalf("/memory ack = %q", r.Text)
+	}
+	waitFor(t, func() bool { _, ok, _ := store.Proposal(1); return ok })
+	p, _, _ := store.Proposal(1)
+	if !strings.Contains(p.Reply, `"theme":"family"`) || !strings.Contains(p.Reply, "Theo") {
+		t.Fatalf("proposal = %q; want themed memory_save", p.Reply)
+	}
+	if got := nextMessage(t, calls); !strings.Contains(got["text"].(string), "approval needed") {
+		t.Fatalf("proposal push = %q", got["text"])
+	}
+
+	srv.gatedCallback(context.Background(), 42, "appr:1")
+	waitFor(t, func() bool { return strings.Contains(readCoreTheme(wiki, "family"), "Theo") })
+
+	// a NEW session (a work chat, say) sees the theme index but not the fact
+	sess, err := srv.newSession(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AddMessage(sess.ID, "user", "seed", 1)
+	store.AddMessage(sess.ID, "assistant", "seeded", 2)
+	rec.reply = "pong"
+	if _, err := srv.chatAnswer(context.Background(), sess, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	prompts := rec.all()
+	last := prompts[len(prompts)-1]
+	if !strings.Contains(last, "family (1 facts, not loaded)") || strings.Contains(last, "Theo") {
+		t.Fatalf("prompt = %q; want the index without the fact", last)
+	}
+
+	// load sticks to the session; facts ride the next prompt
+	rec.reply = `TOOL:memory_load {"theme":"family"}`
+	got, err := srv.chatAnswer(context.Background(), sess, "about my son...")
+	if err != nil || !strings.Contains(got, "family memory loaded") {
+		t.Fatalf("memory_load turn = %q, %v", got, err)
+	}
+	sess, _, _ = store.Session(sess.ID)
+	if !strings.Contains(sess.Themes, "family") {
+		t.Fatalf("session themes = %q; want family", sess.Themes)
+	}
+	rec.reply = "pong"
+	if _, err := srv.chatAnswer(context.Background(), sess, "his name?"); err != nil {
+		t.Fatal(err)
+	}
+	prompts = rec.all()
+	if !strings.Contains(prompts[len(prompts)-1], "Theo") {
+		t.Fatal("loaded theme's fact missing from the prompt")
+	}
+
+	// general facts ride every prompt with no load
+	if err := appendCore(wiki, "general", "Owner prefers Portuguese"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.chatAnswer(context.Background(), sess, "oi"); err != nil {
+		t.Fatal(err)
+	}
+	prompts = rec.all()
+	if !strings.Contains(prompts[len(prompts)-1], "Owner prefers Portuguese") {
+		t.Fatal("general fact missing from the prompt")
 	}
 }

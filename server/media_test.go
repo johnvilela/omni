@@ -161,7 +161,7 @@ func TestChatFileTools(t *testing.T) {
 	srv, _, calls := newMediaServer(t)
 	ctx := context.Background()
 
-	got := srv.applyTools(ctx, `TOOL:write_file {"path":"notes.txt","content":"hello world"}`)
+	got := srv.applyTools(ctx, "", `TOOL:write_file {"path":"notes.txt","content":"hello world"}`)
 	path := filepath.Join(filesDir(), "notes.txt")
 	if got != fmt.Sprintf("📝 wrote %s (11 bytes)", path) {
 		t.Fatalf("write reply = %q", got)
@@ -170,7 +170,7 @@ func TestChatFileTools(t *testing.T) {
 		t.Fatalf("workspace file = %q, %v; want hello world", raw, err)
 	}
 
-	got = srv.applyTools(ctx, `TOOL:read_file {"path":"notes.txt"}`)
+	got = srv.applyTools(ctx, "", `TOOL:read_file {"path":"notes.txt"}`)
 	if !strings.Contains(got, "📄 "+path) || !strings.Contains(got, "hello world") {
 		t.Fatalf("read reply = %q", got)
 	}
@@ -180,24 +180,24 @@ func TestChatFileTools(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filesDir(), "shot.jpg"), jpeg, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got = srv.applyTools(ctx, `TOOL:read_file {"path":"shot.jpg"}`)
+	got = srv.applyTools(ctx, "", `TOOL:read_file {"path":"shot.jpg"}`)
 	if !strings.Contains(got, "⚠ read_file:") || !strings.Contains(got, "binary") || !strings.Contains(got, "analyze_file") {
 		t.Fatalf("binary read reply = %q; want ⚠ binary refusal pointing to analyze_file", got)
 	}
 
-	got = srv.applyTools(ctx, `TOOL:edit_file {"path":"notes.txt","find":"world","replace":"omni"}`)
+	got = srv.applyTools(ctx, "", `TOOL:edit_file {"path":"notes.txt","find":"world","replace":"omni"}`)
 	if !strings.Contains(got, "✏") || !strings.Contains(got, "1 replacement") {
 		t.Fatalf("edit reply = %q", got)
 	}
 	if raw, _ := os.ReadFile(path); string(raw) != "hello omni" {
 		t.Fatalf("edited file = %q; want hello omni", raw)
 	}
-	if got = srv.applyTools(ctx, `TOOL:edit_file {"path":"notes.txt","find":"nope","replace":"x"}`); !strings.Contains(got, "⚠ edit_file: text not found") {
+	if got = srv.applyTools(ctx, "", `TOOL:edit_file {"path":"notes.txt","find":"nope","replace":"x"}`); !strings.Contains(got, "⚠ edit_file: text not found") {
 		t.Fatalf("edit miss reply = %q", got)
 	}
 
 	// write + send in one reply, executed in order
-	got = srv.applyTools(ctx, "here you go\n"+
+	got = srv.applyTools(ctx, "", "here you go\n"+
 		`TOOL:write_file {"path":"out.txt","content":"payload"}`+"\n"+
 		`TOOL:send_file {"path":"out.txt"}`)
 	if !strings.Contains(got, "📝 wrote") || !strings.Contains(got, "📎 sent out.txt") {
@@ -208,14 +208,14 @@ func TestChatFileTools(t *testing.T) {
 		t.Fatalf("sendDocument call = %v", up)
 	}
 
-	got = srv.applyTools(ctx, `TOOL:delete_file {"path":"notes.txt"}`)
+	got = srv.applyTools(ctx, "", `TOOL:delete_file {"path":"notes.txt"}`)
 	if got != "🗑 deleted "+path {
 		t.Fatalf("delete reply = %q", got)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("file still exists after delete: %v", err)
 	}
-	if got = srv.applyTools(ctx, `TOOL:delete_file {"path":"notes.txt"}`); !strings.Contains(got, "⚠ delete_file:") {
+	if got = srv.applyTools(ctx, "", `TOOL:delete_file {"path":"notes.txt"}`); !strings.Contains(got, "⚠ delete_file:") {
 		t.Fatalf("delete gone reply = %q", got)
 	}
 
@@ -226,7 +226,7 @@ func TestChatFileTools(t *testing.T) {
 		`TOOL:delete_file {"path":"` + filepath.Join(agentDir(), "CLAUDE.md") + `"}`,
 		`TOOL:send_file {"path":"/etc/hostname"}`,
 	} {
-		if got := srv.applyTools(ctx, line); !strings.Contains(got, "path outside") {
+		if got := srv.applyTools(ctx, "", line); !strings.Contains(got, "path outside") {
 			t.Fatalf("jail escape %q = %q; want refusal", line, got)
 		}
 	}
@@ -260,7 +260,7 @@ func TestAnalyzeFileTool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := srv.applyTools(context.Background(), `TOOL:analyze_file {"path":"inbox/x.jpg","question":"what is this?"}`)
+	got := srv.applyTools(context.Background(), "", `TOOL:analyze_file {"path":"inbox/x.jpg","question":"what is this?"}`)
 	if got != "pong" {
 		t.Fatalf("analyze reply = %q; want the agent answer", got)
 	}
@@ -270,11 +270,11 @@ func TestAnalyzeFileTool(t *testing.T) {
 	}
 
 	// missing file: refused before any agent run
-	if got := srv.applyTools(context.Background(), `TOOL:analyze_file {"path":"nope.jpg","question":"?"}`); !strings.Contains(got, "⚠ analyze_file:") {
+	if got := srv.applyTools(context.Background(), "", `TOOL:analyze_file {"path":"nope.jpg","question":"?"}`); !strings.Contains(got, "⚠ analyze_file:") {
 		t.Fatalf("missing-file reply = %q", got)
 	}
 	// jail still applies
-	if got := srv.applyTools(context.Background(), `TOOL:analyze_file {"path":"/etc/passwd","question":"?"}`); !strings.Contains(got, "path outside") {
+	if got := srv.applyTools(context.Background(), "", `TOOL:analyze_file {"path":"/etc/passwd","question":"?"}`); !strings.Contains(got, "path outside") {
 		t.Fatalf("jail reply = %q", got)
 	}
 }

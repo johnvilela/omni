@@ -69,6 +69,10 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		return s.handleInterrupt() // outside terminal mode: ^C a running "$" one-shot
 	case "/ops":
 		return s.opsMenu()
+	case "/plan":
+		return s.handlePlan(arg)
+	case "/memory":
+		return s.handleMemory(arg)
 	}
 	if pick, rest, ok := cutAtProvider(text); ok {
 		return s.atProvider(pick, rest)

@@ -121,8 +121,9 @@ Ask the bot owner to approve with:
 // gets silence (their spinner was already answered). Data is a session uuid
 // (resume), a "cron-del:<id>" (delete from /crons), an approval-gate action
 // "appr:/alws:/deny:/edit:<id>" (server/approval.go), a one-tap-update
-// action "upd:/updlog:/updign:<tag>" (server/update.go), or an "ops:<action>"
-// quick action (server/ops.go).
+// action "upd:/updlog:/updign:<tag>" (server/update.go), an "ops:<action>"
+// quick action (server/ops.go), or an "opt:<text>" planning-interview answer
+// (server/plan.go).
 func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgReply {
 	p, ok, err := s.store.Pairing("telegram", strconv.FormatInt(fromID, 10))
 	if err != nil || !ok || !p.Approved {
@@ -163,6 +164,15 @@ func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgR
 	}
 	if act, ok := strings.CutPrefix(data, "ops:"); ok {
 		return s.opsAction(act)
+	}
+	if opt, ok := strings.CutPrefix(data, "opt:"); ok {
+		// a tapped planning-interview option answers exactly as if typed
+		r := s.sessionAnswer(opt)
+		if r.Text == "" {
+			r = tgReply{Text: "▶ " + opt}
+		}
+		r.StripKeyboard = true // options are stale once one is picked
+		return r
 	}
 	return s.resumeSession(data)
 }
