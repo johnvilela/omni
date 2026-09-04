@@ -528,6 +528,15 @@ func dataDir() string {
 	return filepath.Join(dir, app)
 }
 
+// alertLine renders one guardian.json entry; omni-update's value is an
+// offered release tag, not a red-since timestamp.
+func alertLine(name, val string) string {
+	if name == "omni-update" {
+		return name + " — " + val + " available"
+	}
+	return name + " — red since " + val
+}
+
 // guardianAlerts reads the guardian's persisted red checks (name → red-since).
 func guardianAlerts() map[string]string {
 	st := map[string]string{}
@@ -563,7 +572,7 @@ func runGuardianStatus() int {
 		return 0
 	}
 	for _, name := range slices.Sorted(maps.Keys(st)) {
-		fmt.Println(warnStyle.Render("! " + name + " — red since " + st[name]))
+		fmt.Println(warnStyle.Render("! " + alertLine(name, st[name])))
 	}
 	return 0
 }

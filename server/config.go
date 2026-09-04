@@ -26,6 +26,7 @@ type Config struct {
 	Approvals     string   `yaml:"approvals"`      // "off" disables the gate; anything else = on
 	ApprovalTools []string `yaml:"approval_tools"` // TOOL names needing approval; unset = default privileged set
 	ApprovalSkip  []string `yaml:"approval_skip"`  // whitelisted via ✅ always — subtracted from the gated set
+	UpdateRepos   []string `yaml:"update_repos"`   // GitHub owner/name repos the guardian watches for releases
 }
 
 // readConfig loads ~/.config/omni/config.yaml; zero Config on any error.

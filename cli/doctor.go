@@ -234,7 +234,7 @@ func serviceChecks() []check {
 	}
 	for _, name := range slices.Sorted(maps.Keys(alerts)) {
 		cs = append(cs, check{
-			name: "guardian alert: " + name + " — red since " + alerts[name],
+			name: "guardian alert: " + alertLine(name, alerts[name]),
 			fix:  "journalctl --user -u " + app + "-guardian -n 20",
 		})
 	}

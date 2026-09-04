@@ -13,10 +13,13 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -313,9 +316,16 @@ func semverLess(a, b string) bool {
 // checkUpdates compares each watched repo (config.yaml update_repos, GitHub
 // "owner/name") against what is installed: the binary named like the repo,
 // except omni itself, whose version is compiled in (the CLI has no --version).
-// definitive is false when any lookup failed — the caller then keeps the
-// previous alert state instead of faking a recovery.
-func checkUpdates(repos []string) (checkResult, bool) {
+// A stale prod omni is returned as omniTag for the one-tap update offer
+// instead of joining the text alert (unless that tag is ignored); dev builds
+// keep the text alert, since release assets are prod-named. definitive is
+// false when any lookup failed — the caller then keeps the previous alert
+// state instead of faking a recovery.
+func checkUpdates(repos []string) (r checkResult, omniTag string, definitive bool) {
+	ignored := ""
+	if data, err := os.ReadFile(filepath.Join(dataDir(), "update.ignore")); err == nil {
+		ignored = strings.TrimSpace(string(data))
+	}
 	var stale []string
 	for _, repo := range repos {
 		bin := filepath.Base(repo)
@@ -329,21 +339,237 @@ func checkUpdates(repos []string) (checkResult, bool) {
 		latest, err := latestRelease(repo)
 		if err != nil {
 			log.Printf("updates: %v", err)
-			return checkResult{}, false
+			return checkResult{}, "", false
 		}
-		if semverLess(cur, latest) {
-			stale = append(stale, fmt.Sprintf("%s %s → %s", bin, cur, latest))
+		if !semverLess(cur, latest) {
+			continue
 		}
+		if bin == "omni" && app == "omni" {
+			if latest != ignored {
+				omniTag = latest
+			}
+			continue
+		}
+		stale = append(stale, fmt.Sprintf("%s %s → %s", bin, cur, latest))
 	}
 	if len(stale) > 0 {
-		return checkResult{name: "updates", detail: strings.Join(stale, ", ") + " — rerun scripts/install.sh"}, true
+		return checkResult{name: "updates", detail: strings.Join(stale, ", ") + " — rerun scripts/install.sh"}, omniTag, true
 	}
-	return checkResult{name: "updates", ok: true, detail: "watched packages current"}, true
+	return checkResult{name: "updates", ok: true, detail: "watched packages current"}, omniTag, true
+}
+
+// ---- one-tap update executor -----------------------------------------------
+// The server writes <data>/update.request when the owner taps ⬆ Update and
+// starts this unit; the guardian does the download/install/rollback out of
+// process, because the server cannot restart itself and survive to report.
+
+func binDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return filepath.Join(home, ".local", "bin") // matches scripts/install.sh
+}
+
+// claimUpdateRequest atomically takes ownership of a pending update.request
+// via rename — systemd serializes guardian starts, this is belt-and-braces.
+func claimUpdateRequest() (string, bool) {
+	req := filepath.Join(dataDir(), "update.request")
+	if os.Rename(req, req+".run") != nil {
+		return "", false
+	}
+	defer os.Remove(req + ".run")
+	data, err := os.ReadFile(req + ".run")
+	tag := strings.TrimSpace(string(data))
+	return tag, err == nil && tag != ""
+}
+
+// releaseAssets maps asset name → download url for one release tag; decodes
+// only what it needs, like latestRelease.
+func releaseAssets(repo, tag string) (map[string]string, error) {
+	base := os.Getenv("OMNI_GITHUB_API") // test/debug override
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	c := http.Client{Timeout: 10 * time.Second}
+	resp, err := c.Get(base + "/repos/" + repo + "/releases/tags/" + tag)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github %s %s: %s", repo, tag, resp.Status)
+	}
+	var r struct {
+		Assets []struct {
+			Name string `json:"name"`
+			URL  string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, err
+	}
+	assets := map[string]string{}
+	for _, a := range r.Assets {
+		assets[a.Name] = a.URL
+	}
+	return assets, nil
+}
+
+func downloadAsset(url, dest string) error {
+	c := http.Client{Timeout: 5 * time.Minute} // follows the github → objects redirect
+	resp, err := c.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download %s: %s", url, resp.Status)
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		os.Remove(dest)
+		return err
+	}
+	return f.Close()
+}
+
+func omniRepo(repos []string) string {
+	for _, r := range repos {
+		if filepath.Base(r) == "omni" {
+			return r
+		}
+	}
+	return ""
+}
+
+// rollbackBins puts the .prev backups back; best-effort.
+func rollbackBins(bins []string) {
+	for _, b := range bins {
+		dst := filepath.Join(binDir(), b)
+		if err := os.Rename(dst+".prev", dst); err != nil {
+			log.Printf("update: rollback %s: %v", b, err)
+		}
+	}
+}
+
+// runUpdate downloads release tag's binaries, verifies them against
+// checksums.txt, swaps them in with .prev backups, restarts the server and
+// health-checks it — restoring the backups if the new server never reports
+// the new version. Every outcome is reported to the owner.
+func runUpdate(cfg config, token string, ids []int64, tag string) {
+	report := func(m string) {
+		log.Print(m)
+		sendAll(token, ids, m, nil)
+	}
+	if version.Version == tag {
+		log.Printf("update: already on %s", tag) // re-delivered tap after restart
+		return
+	}
+	repo := omniRepo(cfg.UpdateRepos)
+	if repo == "" {
+		report("⚠ omni update to " + tag + " failed: omni not in update_repos — nothing was changed")
+		return
+	}
+	assets, err := releaseAssets(repo, tag)
+	if err != nil {
+		report("⚠ omni update to " + tag + " failed: " + err.Error() + " — nothing was changed")
+		return
+	}
+
+	stage := filepath.Join(dataDir(), "update-stage")
+	os.RemoveAll(stage)
+	if err := os.MkdirAll(stage, 0o700); err != nil {
+		report("⚠ omni update to " + tag + " failed: " + err.Error() + " — nothing was changed")
+		return
+	}
+	defer os.RemoveAll(stage)
+
+	bins := []string{"omni", "omni-server", "omni-guardian"}
+	names := map[string]string{} // bin → asset name
+	for _, b := range append([]string{"checksums.txt"}, bins...) {
+		name := b
+		if b != "checksums.txt" {
+			name = b + "_linux_" + runtime.GOARCH
+			names[b] = name
+		}
+		url, ok := assets[name]
+		if !ok {
+			report("⚠ omni update to " + tag + " failed: release has no asset " + name + " — nothing was changed")
+			return
+		}
+		if err := downloadAsset(url, filepath.Join(stage, name)); err != nil {
+			report("⚠ omni update to " + tag + " failed: " + err.Error() + " — nothing was changed")
+			return
+		}
+	}
+
+	sums := map[string]string{} // asset name → sha256 hex, plain `sha256sum` lines
+	data, _ := os.ReadFile(filepath.Join(stage, "checksums.txt"))
+	for _, line := range strings.Split(string(data), "\n") {
+		if f := strings.Fields(line); len(f) == 2 {
+			sums[f[1]] = f[0]
+		}
+	}
+	for _, b := range bins {
+		body, err := os.ReadFile(filepath.Join(stage, names[b]))
+		if err != nil {
+			report("⚠ omni update to " + tag + " failed: " + err.Error() + " — nothing was changed")
+			return
+		}
+		if sums[names[b]] != fmt.Sprintf("%x", sha256.Sum256(body)) {
+			report("⚠ omni update to " + tag + " aborted: checksum mismatch for " + names[b] + " — nothing was changed")
+			return
+		}
+	}
+
+	var installed []string
+	for _, b := range bins {
+		dst := filepath.Join(binDir(), b)
+		os.Rename(dst, dst+".prev") // backup; ENOENT fine (nothing to back up)
+		// stage may be on another filesystem: copy to a .tmp sibling, then
+		// rename — atomic, and never opens the busy binary (no ETXTBSY)
+		body, _ := os.ReadFile(filepath.Join(stage, names[b]))
+		err := os.WriteFile(dst+".tmp", body, 0o755)
+		if err == nil {
+			err = os.Rename(dst+".tmp", dst)
+		}
+		if err != nil {
+			rollbackBins(installed)
+			report("⚠ omni update to " + tag + " failed: " + err.Error() + " — previous binaries restored")
+			return
+		}
+		installed = append(installed, b)
+	}
+
+	exec.Command("systemctl", "--user", "restart", app+"-server.service").Run()
+	if waitServer(tag) {
+		st := loadState()
+		delete(st, "omni-update") // clear the doctor alert now, not in 6h
+		saveState(st)
+		report("✅ omni updated " + version.Version + " → " + tag)
+		return
+	}
+	rollbackBins(bins)
+	exec.Command("systemctl", "--user", "restart", app+"-server.service").Run()
+	if waitServer("") { // any healthy omni counts — don't demand an exact old version
+		report("⚠ omni " + tag + " failed its health check — rolled back to " + version.Version + ", server healthy")
+	} else {
+		report("🚨 omni " + tag + " failed AND the rollback is not responding — check: systemctl --user status " + app + "-server")
+	}
 }
 
 // ---- server probe + heal ---------------------------------------------------
 
-func probeServer() error {
+var probeTries, probeDelay = 15, 3 * time.Second // vars so tests shrink the wait
+
+// probeVersion GETs /status and returns the server's version; the app-name
+// check catches a dev/prod port mixup.
+func probeVersion() (string, error) {
 	addr := os.Getenv("OMNI_ADDR")
 	if addr == "" {
 		addr = defaultAddr
@@ -354,19 +580,40 @@ func probeServer() error {
 	c := http.Client{Timeout: 5 * time.Second}
 	resp, err := c.Get("http://" + addr + "/status")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	var st struct {
-		App string `json:"app"`
+		App     string `json:"app"`
+		Version string `json:"version"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
-		return err
+		return "", err
 	}
 	if st.App != app {
-		return fmt.Errorf("unexpected app %q on %s", st.App, addr)
+		return "", fmt.Errorf("unexpected app %q on %s", st.App, addr)
 	}
-	return nil
+	return st.Version, nil
+}
+
+func probeServer() error {
+	_, err := probeVersion()
+	return err
+}
+
+// waitServer polls until the server responds (and, when want != "", reports
+// exactly that version — proof the intended binary took). systemctl restart
+// returns before the port is bound (wiki/install.md), and startup can block
+// ~30s on the telegram resume when telegram is unreachable — hence the long
+// budget.
+func waitServer(want string) bool {
+	for range probeTries {
+		time.Sleep(probeDelay)
+		if v, err := probeVersion(); err == nil && (want == "" || v == want) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkServer probes /status and, when the server doesn't answer, restarts
@@ -386,15 +633,9 @@ func checkServer() checkResult {
 	if err := exec.Command("systemctl", "--user", "restart", unit).Run(); err != nil {
 		return checkResult{name: "server", detail: fmt.Sprintf("down (%s), restart failed: %v", was, err)}
 	}
-	// systemctl restart returns before the port is bound (wiki/install.md),
-	// and startup can block ~30s on the telegram resume when telegram is
-	// unreachable — so wait well past that before declaring it dead
-	for range 15 {
-		time.Sleep(3 * time.Second)
-		if probeServer() == nil {
-			return checkResult{name: "server", ok: true, detail: "responding",
-				event: fmt.Sprintf("server was %s — restarted by guardian", was)}
-		}
+	if waitServer("") {
+		return checkResult{name: "server", ok: true, detail: "responding",
+			event: fmt.Sprintf("server was %s — restarted by guardian", was)}
 	}
 	return checkResult{name: "server", detail: fmt.Sprintf("down (%s), restarted but still not responding", was)}
 }
@@ -502,16 +743,32 @@ func recipients(db *sql.DB) []int64 {
 	return ids
 }
 
-func sendAll(token string, ids []int64, msg string) bool {
+func sendAll(token string, ids []int64, msg string, kb any) bool {
 	sent := false
 	for _, id := range ids {
-		if err := tgCall(token, "sendMessage", map[string]any{"chat_id": id, "text": msg}, nil); err != nil {
+		body := map[string]any{"chat_id": id, "text": msg}
+		if kb != nil {
+			body["reply_markup"] = map[string]any{"inline_keyboard": kb}
+		}
+		if err := tgCall(token, "sendMessage", body, nil); err != nil {
 			log.Printf("send to %d: %v", id, err)
 			continue
 		}
 		sent = true
 	}
 	return sent
+}
+
+// sendUpdateOffer posts the one-tap update message. The taps come back to the
+// server (the guardian never polls getUpdates), which records the choice as
+// update.request / update.ignore in the data dir for the next guardian run.
+func sendUpdateOffer(token string, ids []int64, tag string) bool {
+	kb := [][]map[string]string{{
+		{"text": "⬆ Update", "callback_data": "upd:" + tag},
+		{"text": "📋 Changelog", "callback_data": "updlog:" + tag},
+		{"text": "🙈 Ignore", "callback_data": "updign:" + tag},
+	}}
+	return sendAll(token, ids, "🆕 omni "+tag+" available (current "+version.Version+")", kb)
 }
 
 // ---- alert state (once per incident + recovery) ----------------------------
@@ -589,6 +846,13 @@ func main() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 
+	if app == "omni" { // release assets are prod-named; dev never writes requests
+		if tag, ok := claimUpdateRequest(); ok {
+			runUpdate(cfg, token, recipients(db), tag)
+			return // server was just restarted+probed; normal checks resume next tick
+		}
+	}
+
 	results := []checkResult{
 		checkDisk(), checkMem(), checkLoad(), checkNet(), checkAgents(),
 		checkSQLite(db), checkDBSize(), checkAuth(db, cfg),
@@ -596,26 +860,32 @@ func main() {
 	}
 
 	now := time.Now()
-	updatesRan := false
+	updatesRan, omniTag := false, ""
 	if len(cfg.UpdateRepos) > 0 && updatesDue(now) {
-		if r, ok := checkUpdates(cfg.UpdateRepos); ok {
-			results = append(results, r)
-			updatesRan = true
+		if r, tag, ok := checkUpdates(cfg.UpdateRepos); ok {
+			results, omniTag, updatesRan = append(results, r), tag, true
 		}
 		stampUpdates() // even indeterminate: retry in hours, not every 2 minutes
 	}
 
 	prev := loadState()
 	msg, next := transitions(prev, results, now)
-	if !updatesRan { // a standing update alert must survive throttled runs
-		if since, ok := prev["updates"]; ok {
-			next["updates"] = since
+	if !updatesRan { // standing update state must survive throttled runs
+		for _, k := range []string{"updates", "omni-update"} {
+			if since, ok := prev[k]; ok {
+				next[k] = since
+			}
 		}
+	} else if omniTag != "" {
+		next["omni-update"] = omniTag // value is the offered tag, not a time
 	}
-	if msg == "" {
+	offer := omniTag != "" && prev["omni-update"] != omniTag // one send per tag
+	if msg == "" && !offer && maps.Equal(prev, next) {
 		return // nothing changed: no message, no state write
 	}
-	log.Print(msg) // the journal always gets a copy
+	if msg != "" {
+		log.Print(msg) // the journal always gets a copy
+	}
 
 	ids := recipients(db)
 	if token == "" || len(ids) == 0 {
@@ -623,7 +893,19 @@ func main() {
 		saveState(next) // journal counts as delivered; don't re-log every run
 		return
 	}
-	if sendAll(token, ids, msg) {
+	sent := true
+	if msg != "" {
+		sent = sendAll(token, ids, msg, nil)
+	}
+	if offer && !sendUpdateOffer(token, ids, omniTag) {
+		// offer not delivered: revert the key so the next updates-due run retries
+		if since, ok := prev["omni-update"]; ok {
+			next["omni-update"] = since
+		} else {
+			delete(next, "omni-update")
+		}
+	}
+	if sent {
 		saveState(next)
 	} else {
 		log.Print("telegram send failed — state kept, retrying next run")

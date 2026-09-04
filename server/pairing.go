@@ -119,8 +119,9 @@ Ask the bot owner to approve with:
 
 // gatedCallback lets only approved senders act on button taps; anyone else
 // gets silence (their spinner was already answered). Data is a session uuid
-// (resume), a "cron-del:<id>" (delete from /crons), or an approval-gate
-// action "appr:/alws:/deny:/edit:<id>" (server/approval.go).
+// (resume), a "cron-del:<id>" (delete from /crons), an approval-gate action
+// "appr:/alws:/deny:/edit:<id>" (server/approval.go), or a one-tap-update
+// action "upd:/updlog:/updign:<tag>" (server/update.go).
 func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgReply {
 	p, ok, err := s.store.Pairing("telegram", strconv.FormatInt(fromID, 10))
 	if err != nil || !ok || !p.Approved {
@@ -149,6 +150,15 @@ func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgR
 	}
 	if id, ok := strings.CutPrefix(data, "edit:"); ok {
 		return s.editProposal(id)
+	}
+	if tag, ok := strings.CutPrefix(data, "upd:"); ok {
+		return s.startUpdate(tag)
+	}
+	if tag, ok := strings.CutPrefix(data, "updlog:"); ok {
+		return s.updateChangelog(tag)
+	}
+	if tag, ok := strings.CutPrefix(data, "updign:"); ok {
+		return s.ignoreUpdate(tag)
 	}
 	return s.resumeSession(data)
 }
