@@ -92,7 +92,7 @@ func TestQueueDeferredDelivery(t *testing.T) {
 		t.Fatalf("unread = %q; want the stored answer", s2.Unread)
 	}
 
-	reply := srv.resumeSession(sessA.ID)
+	reply := srv.resumeSession(context.Background(), sessA.ID)
 	if !strings.Contains(reply.Text, "resumed") || !strings.Contains(reply.Text, "pong") {
 		t.Fatalf("resume = %q; want resumed + the unread answer", reply.Text)
 	}

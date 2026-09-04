@@ -124,7 +124,7 @@ Ask the bot owner to approve with:
 // action "upd:/updlog:/updign:<tag>" (server/update.go), an "ops:<action>"
 // quick action (server/ops.go), or an "opt:<text>" planning-interview answer
 // (server/plan.go).
-func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgReply {
+func (s *Server) gatedCallback(ctx context.Context, fromID int64, data string) tgReply {
 	p, ok, err := s.store.Pairing("telegram", strconv.FormatInt(fromID, 10))
 	if err != nil || !ok || !p.Approved {
 		return tgReply{}
@@ -174,5 +174,5 @@ func (s *Server) gatedCallback(_ context.Context, fromID int64, data string) tgR
 		r.StripKeyboard = true // options are stale once one is picked
 		return r
 	}
-	return s.resumeSession(data)
+	return s.resumeSession(ctx, data)
 }

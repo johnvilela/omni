@@ -22,11 +22,15 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 	}
 	cmd, arg, _ := strings.Cut(text, " ")
 	switch cmd {
+	case "/clear":
+		s.clearChats(ctx)
+		return tgReply{DeleteInbound: true} // the empty chat is the feedback
 	case "/new":
 		if _, err := s.newSession(false, ""); err != nil {
 			return tgReply{Text: "⚠ " + err.Error()}
 		}
-		return tgReply{Text: "started a new session"}
+		s.clearChats(ctx)
+		return tgReply{DeleteInbound: true} // silent: the pin dashboard shows the switch
 	case "/agent":
 		provider, note := agentProvider()
 		if pick, rest, ok := cutAtProvider(arg); ok {
@@ -46,11 +50,12 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		if err := ensureAgentDir(); err != nil {
 			return tgReply{Text: "⚠ " + err.Error()}
 		}
+		s.clearChats(ctx) // before enqueue: the task's answer must outlive the clear
 		if arg == "" {
-			return tgReply{Text: note + "agent session started (" + provider + ") — send it a task"}
+			return tgReply{Text: note + "agent session started (" + provider + ") — send it a task", DeleteInbound: true}
 		}
 		s.enqueue(sess.ID, arg)
-		return tgReply{Text: note + "agent session started (" + provider + ") — ⏳ running"}
+		return tgReply{Text: note + "agent session started (" + provider + ") — ⏳ running", DeleteInbound: true}
 	case "/task":
 		return s.handleTask(arg)
 	case "/tasks":
@@ -228,9 +233,9 @@ func (s *Server) deleteCronCallback(data string) tgReply {
 	return r
 }
 
-// resumeSession points the active pointer at an existing session and delivers
-// any answer that finished while it wasn't active.
-func (s *Server) resumeSession(id string) tgReply {
+// resumeSession points the active pointer at an existing session, clears the
+// chat view and delivers any answer that finished while it wasn't active.
+func (s *Server) resumeSession(ctx context.Context, id string) tgReply {
 	sess, ok, err := s.store.Session(id)
 	if err != nil {
 		return tgReply{Text: "⚠ " + err.Error()}
@@ -241,6 +246,7 @@ func (s *Server) resumeSession(id string) tgReply {
 	if err := s.store.SetActiveSession(id); err != nil {
 		return tgReply{Text: "⚠ " + err.Error()}
 	}
+	s.clearChats(ctx)
 	reply := "resumed: " + sessionLabel(sess)
 	if u := strings.TrimSpace(sess.Unread); u != "" {
 		s.store.ClearSessionUnread(sess.ID) // best-effort
