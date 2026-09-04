@@ -157,6 +157,7 @@ func (t *Telegram) registerCommands(ctx context.Context) error {
 		{"command": "pin", "description": "toggle pinned status dashboard — /pin [full|clean]"},
 		{"command": "terminal", "description": "shell mode — run commands on this PC as you (/exit to leave)"},
 		{"command": "interrupt", "description": "^C the running command — /terminal or $ one-shot"},
+		{"command": "ops", "description": "quick actions — status, doctor, logs, disk, restart, update"},
 	}}, nil)
 }
 
