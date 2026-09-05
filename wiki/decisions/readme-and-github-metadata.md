@@ -12,7 +12,7 @@ The repo previously had no `README.md` and no `LICENSE` — `AGENTS.md`/`CLAUDE.
 
 ## Accuracy points the README had to get right
 
-- `scripts/install.sh` **builds from source** (git clone + `go test` + a `gum`-driven install) — it is NOT a release downloader. GitHub releases (via `.github/workflows/release.yml`) are consumed only by the guardian's one-tap self-update path and by `omni plugins install`, never by first-time install. The README's install guide states this explicitly rather than implying a `curl | sh` one-liner.
+- `scripts/install.sh` **builds from source** (git clone + `go test` + a `gum`-driven install) — it is NOT a release downloader. GitHub releases (via `.github/workflows/release.yml`) are consumed only by the guardian's one-tap self-update path and by `omni plugins install`, never by first-time install. The README's install guide states this explicitly rather than implying a `curl | sh` one-liner. **Superseded 2026-09-05**: install.sh is now exactly that `curl | bash` release downloader (no go/gum/git) and the README's Installation section shows the one-liner — see [[install]].
 - The setup guide follows the real flow: `omni channels connect -c telegram` → `omni llm connect -p <provider>` → `omni llm set-default -p <provider>` → the owner runs `omni pairing approve telegram <code>` for the first paired sender → `omni doctor` to verify. Access control is per-user pairing codes, not a single configured chat id.
 
 ## Shipping

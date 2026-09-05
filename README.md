@@ -33,23 +33,34 @@ Omni is a personal AI hub you run on your own machine. It puts Claude, Codex and
 ## Requirements
 
 - Linux (amd64/arm64) with systemd user services
-- [Go](https://go.dev) 1.27+ and [gum](https://github.com/charmbracelet/gum) (build-time)
+- `curl` (or `wget`) and `sha256sum` — that's all the installer needs; no Go, git or gum
 - Optional: the `claude`, `codex` or `gemini` CLIs — reused for login and required for agent mode (plain API keys cover chat mode)
 
 ## Installation
 
-Omni builds from source — clone and run the installer:
+One command on a bare machine — it downloads the latest release for your CPU and sets everything up:
 
 ```sh
-git clone https://github.com/johnvilela/omni.git
-cd omni
-scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install.sh | bash
 ```
 
-The installer runs the tests, builds the three binaries (`omni`, `omni-server`, `omni-guardian`) into `~/.local/bin`, and enables two systemd user units: `omni-server.service` (the always-on hub) and `omni-guardian.timer` (the watchdog). Re-running it later upgrades in place.
+The installer fetches the three static binaries (`omni`, `omni-server`, `omni-guardian`) from the [latest GitHub release](https://github.com/johnvilela/omni/releases/latest), verifies them against the release's `checksums.txt`, installs them into `~/.local/bin`, and enables two systemd user units: `omni-server.service` (the always-on hub) and `omni-guardian.timer` (the watchdog). It also enables login lingering so the server keeps running after you log out of a headless box. Re-running it later upgrades in place.
 
 ```sh
 systemctl --user status omni-server   # should be active
+```
+
+Knobs, as environment variables in front of `bash`:
+
+| Variable | Effect |
+|---|---|
+| `OMNI_VERSION=v0.25.0` | install that release instead of the latest |
+| `OMNI_SKIP_DEPS=1` | skip the agent dependencies step (node, chromium, playwright, memoria) |
+
+To remove omni again (it asks before deleting your config and database):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/uninstall.sh | bash
 ```
 
 ## Setup
@@ -109,7 +120,7 @@ omni plugins install owner/repo
 
 ## Development
 
-`scripts/dev.sh` installs a parallel `omni-dev` stack (own port `:8788`, own config and database) that coexists with your production install. `scripts/build.sh` is the single build entrypoint (`PROD=1`, `APP`, `ADDR` knobs). `scripts/uninstall.sh` removes everything, prompting before touching data.
+Building from source needs [Go](https://go.dev) 1.27+ and [gum](https://github.com/charmbracelet/gum). `scripts/dev.sh` builds the working tree and installs a parallel `omni-dev` stack (own port `:8788`, own config and database) that coexists with your production install. `scripts/build.sh` is the single build entrypoint (`PROD=1`, `APP`, `ADDR` knobs; `build.sh all` produces the release matrix). `scripts/uninstall.sh` removes everything, prompting before touching data.
 
 ## License
 
