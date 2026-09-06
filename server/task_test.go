@@ -44,6 +44,9 @@ func newTaskServer(t *testing.T) (*Server, *Store, chan map[string]any) {
 	t.Helper()
 	srv, store := newLLMTestServer(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if err := store.SetConnected("llm:claude", true); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.AddPairing("telegram", "42", "CODE"); err != nil {
 		t.Fatal(err)
 	}

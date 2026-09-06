@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,7 +33,7 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		s.clearChats(ctx)
 		return tgReply{DeleteInbound: true} // silent: the pin dashboard shows the switch
 	case "/agent":
-		provider, note := agentProvider()
+		var provider, note string
 		if pick, rest, ok := cutAtProvider(arg); ok {
 			p, err := parseProvider(pick)
 			if err != nil {
@@ -41,7 +42,16 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 			if p == "gemini" {
 				return tgReply{Text: "⚠ gemini is not supported for agent mode — use @openai or @claude"}
 			}
+			if err := s.agentProviderAvailable(p); err != nil {
+				return tgReply{Text: "⚠ " + err.Error()}
+			}
 			provider, note, arg = p, "", rest // explicit pick: no fallback note
+		} else {
+			var err error
+			provider, note, err = s.agentProvider()
+			if err != nil {
+				return tgReply{Text: "⚠ " + err.Error()}
+			}
 		}
 		sess, err := s.newSession(true, provider)
 		if err != nil {
@@ -146,17 +156,62 @@ func (s *Server) newSession(agent bool, provider string) (Session, error) {
 	return Session{ID: id, Agent: agent, Provider: provider}, nil
 }
 
-// agentProvider picks the vendor CLI for a new agent session: the default
-// llm when it can act as an agent, else claude. Gemini has no usable
-// non-interactive session resume, so it falls back with a note.
-func agentProvider() (provider, note string) {
-	switch readConfig().DefaultLLM {
-	case "openai":
-		return "openai", ""
-	case "gemini":
-		return "claude", "gemini is not supported for agent mode — using claude\n\n"
+// agentProviderAvailable validates the whole agent-mode contract for one
+// provider: it must be connected and its vendor CLI must be executable.
+// Chat can use API keys without a CLI, but agent mode always shells out.
+func (s *Server) agentProviderAvailable(provider string) error {
+	connected := false
+	for _, st := range s.llmStatuses() {
+		if st.Name == provider {
+			connected = st.Connected
+			break
+		}
 	}
-	return "claude", ""
+	if !connected {
+		return fmt.Errorf("%s is not connected — run omni llm connect -p %s", provider, provider)
+	}
+	bin := map[string]string{"openai": "codex", "claude": "claude"}[provider]
+	if _, err := exec.LookPath(resolveBin(bin)); err != nil {
+		return fmt.Errorf("%s agent needs the %q CLI on PATH — install and log in to it first", provider, bin)
+	}
+	return nil
+}
+
+// agentProvider picks an available vendor CLI for every agent-powered path.
+// An explicit agent-capable default wins; otherwise a sole available provider
+// is implied, matching llmStatuses. Ambiguous or unavailable setups fail
+// before a session/job is created instead of surfacing an exec error later.
+func (s *Server) agentProvider() (provider, note string, err error) {
+	def := readConfig().DefaultLLM
+	if def == "openai" || def == "claude" {
+		if err := s.agentProviderAvailable(def); err == nil {
+			return def, "", nil
+		}
+	}
+
+	var available []string
+	for _, p := range []string{"openai", "claude"} {
+		if s.agentProviderAvailable(p) == nil {
+			available = append(available, p)
+		}
+	}
+	if len(available) == 1 {
+		if def != "" && def != available[0] {
+			return available[0], def + " is not available for agent mode — using " + available[0] + "\n\n", nil
+		}
+		return available[0], "", nil
+	}
+	if len(available) > 1 {
+		return "", "", fmt.Errorf("multiple agent providers are available — set a default or use /agent @openai or /agent @claude")
+	}
+	for _, p := range []string{"openai", "claude"} {
+		for _, st := range s.llmStatuses() {
+			if st.Name == p && st.Connected {
+				return "", "", s.agentProviderAvailable(p)
+			}
+		}
+	}
+	return "", "", fmt.Errorf("no agent provider available — connect Codex or Claude Code first")
 }
 
 // listSessions renders the last 5 sessions as an inline keyboard; tapping a

@@ -114,7 +114,7 @@ func resolveLLM(provider, reqKey string) (source, key string) {
 		return "api_key", k
 	}
 	if provider == "claude" {
-		if _, err := exec.LookPath("claude"); err == nil {
+		if _, err := exec.LookPath(resolveBin("claude")); err == nil {
 			return "claude-code", ""
 		}
 	}

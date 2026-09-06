@@ -178,6 +178,25 @@ func TestLLMClaudeBinaryFallback(t *testing.T) {
 	}
 }
 
+func TestResolveLLMClaudeLocalBinFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("PATH", t.TempDir())
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if source, key := resolveLLM("claude", ""); source != "claude-code" || key != "" {
+		t.Fatalf("resolveLLM = %q, %q; want claude-code from ~/.local/bin", source, key)
+	}
+}
+
 func TestLLMDisconnectsWhenCredsGone(t *testing.T) {
 	srv, _ := newLLMTestServer(t)
 	t.Setenv("GEMINI_API_KEY", "GOOD")

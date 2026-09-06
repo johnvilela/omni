@@ -254,10 +254,13 @@ func (s *Server) analyzeFile(ctx context.Context, path, question string) string 
 	}
 	task := "Read the file at " + path + " and answer the owner's question about it. " +
 		"Plain text, concise, in the owner's language. Question: " + question
-	provider, _ := agentProvider()
+	provider, _, err := s.agentProvider()
+	if err != nil {
+		return "⚠ analyze_file: " + err.Error()
+	}
 	var reply string
 	var u callUsage
-	var err error
+	err = nil
 	if provider == "openai" {
 		reply, _, u, err = runCodexAgent(ctx, "", task)
 	} else {

@@ -166,6 +166,10 @@ func TestClearOnSessionSwitch(t *testing.T) {
 func TestClearOnAgentStart(t *testing.T) {
 	srv, store := newLLMTestServer(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	writeAgentFakes(t)
+	if err := store.SetConnected("llm:claude", true); err != nil {
+		t.Fatal(err)
+	}
 	store.AddPairing("telegram", "42", "CODE")
 	store.ApprovePairing("telegram", "CODE")
 	calls := make(chan map[string]any, 32)

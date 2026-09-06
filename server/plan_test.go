@@ -89,6 +89,9 @@ printf '%s\n' '{"result":"trained today\nPLAN DONE","session_id":"v1"}'
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
+	if err := store.SetConnected("llm:claude", true); err != nil {
+		t.Fatal(err)
+	}
 
 	sent := make(chan map[string]any, 2)
 	tgFake := fakeTelegram(t, sent, nil, nil, "")

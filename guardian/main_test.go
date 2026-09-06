@@ -133,6 +133,28 @@ func TestParsePgrep(t *testing.T) {
 	}
 }
 
+func TestCheckTelegramRetriesTransientFailure(t *testing.T) {
+	requests := 0
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			fmt.Fprint(w, `{"ok":false,"description":"temporary timeout"}`)
+			return
+		}
+		fmt.Fprint(w, `{"ok":true,"result":{"username":"omni"}}`)
+	}))
+	defer fake.Close()
+	t.Setenv("OMNI_TELEGRAM_API", fake.URL)
+
+	r := checkTelegram("token")
+	if !r.ok || r.detail != "@omni reachable" {
+		t.Fatalf("checkTelegram = %+v; want recovery within the same guardian run", r)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d; want 2", requests)
+	}
+}
+
 func TestSemverLess(t *testing.T) {
 	cases := []struct {
 		a, b string

@@ -725,10 +725,16 @@ func checkTelegram(token string) checkResult {
 	var me struct {
 		Username string `json:"username"`
 	}
-	if err := tgCall(token, "getMe", struct{}{}, &me); err != nil {
-		return checkResult{name: "telegram", detail: err.Error()}
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = tgCall(token, "getMe", struct{}{}, &me); err == nil {
+			return checkResult{name: "telegram", ok: true, detail: "@" + me.Username + " reachable"}
+		}
+		if attempt < 2 {
+			time.Sleep(250 * time.Millisecond)
+		}
 	}
-	return checkResult{name: "telegram", ok: true, detail: "@" + me.Username + " reachable"}
+	return checkResult{name: "telegram", detail: err.Error()}
 }
 
 // recipients lists the chat ids of every approved telegram pairing (private
