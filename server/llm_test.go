@@ -197,6 +197,26 @@ func TestResolveLLMClaudeLocalBinFallback(t *testing.T) {
 	}
 }
 
+func TestResolveVendorBinPrefersPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	localBin := filepath.Join(home, ".local", "bin")
+	pathBin := t.TempDir()
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{localBin, pathBin} {
+		if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", pathBin)
+
+	if got := resolveVendorBin("claude"); got != filepath.Join(pathBin, "claude") {
+		t.Fatalf("resolveVendorBin = %q; want PATH binary %q", got, filepath.Join(pathBin, "claude"))
+	}
+}
+
 func TestLLMDisconnectsWhenCredsGone(t *testing.T) {
 	srv, _ := newLLMTestServer(t)
 	t.Setenv("GEMINI_API_KEY", "GOOD")

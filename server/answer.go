@@ -153,7 +153,7 @@ func cliArgs(provider, text string) []string {
 		// codex's shell tool can't be disabled; the read-only sandbox
 		// confines it. --ignore-user-config drops MCP servers + hooks but
 		// keeps auth.
-		args := []string{resolveBin("codex"), "exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only"}
+		args := []string{resolveVendorBin("codex"), "exec", "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only"}
 		if model != "" {
 			args = append(args, "-m", model) // before the positional prompt
 		}
@@ -161,7 +161,7 @@ func cliArgs(provider, text string) []string {
 	case "claude":
 		// prompt before --tools: it's variadic and would swallow a trailing
 		// positional. --setting-sources "" ignores user hooks/settings.
-		args := []string{resolveBin("claude"), "-p", text, "--tools", "", "--strict-mcp-config", "--setting-sources", ""}
+		args := []string{resolveVendorBin("claude"), "-p", text, "--tools", "", "--strict-mcp-config", "--setting-sources", ""}
 		if model != "" {
 			args = append(args, "--model", model)
 		}
@@ -172,7 +172,7 @@ func cliArgs(provider, text string) []string {
 		// tools have no disable flag; mutating tools are auto-denied in
 		// non-interactive mode. Use the policy engine if that ever needs
 		// tightening.
-		args := []string{resolveBin("gemini"), "--allowed-mcp-server-names", "omni-none", "-e", "none"}
+		args := []string{resolveVendorBin("gemini"), "--allowed-mcp-server-names", "omni-none", "-e", "none"}
 		if model != "" {
 			args = append(args, "-m", model)
 		}

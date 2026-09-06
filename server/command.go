@@ -171,7 +171,7 @@ func (s *Server) agentProviderAvailable(provider string) error {
 		return fmt.Errorf("%s is not connected — run omni llm connect -p %s", provider, provider)
 	}
 	bin := map[string]string{"openai": "codex", "claude": "claude"}[provider]
-	if _, err := exec.LookPath(resolveBin(bin)); err != nil {
+	if _, err := exec.LookPath(resolveVendorBin(bin)); err != nil {
 		return fmt.Errorf("%s agent needs the %q CLI on PATH — install and log in to it first", provider, bin)
 	}
 	return nil
