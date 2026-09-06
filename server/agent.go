@@ -282,7 +282,7 @@ func runClaudeAgent(ctx context.Context, vendorID, text string) (reply, newVendo
 	if vendorID != "" {
 		args = append(args, "--resume", vendorID)
 	}
-	out, err := runCLI(ctx, agentDir(), agentTimeout, "claude", args...)
+	out, err := runCLI(ctx, agentDir(), agentTimeout, resolveVendorBin("claude"), args...)
 	if err != nil {
 		return "", "", callUsage{}, err
 	}
@@ -312,7 +312,7 @@ func runCodexAgent(ctx context.Context, vendorID, text string) (reply, newVendor
 		"--json", "-o", tmp.Name())
 	args = append(args, codexMCPArgs()...) // codex has no project mcp file
 	args = append(args, text)
-	out, err := runCLI(ctx, agentDir(), agentTimeout, "codex", args...)
+	out, err := runCLI(ctx, agentDir(), agentTimeout, resolveVendorBin("codex"), args...)
 	if err != nil {
 		return "", "", callUsage{}, err
 	}

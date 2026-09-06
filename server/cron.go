@@ -146,14 +146,18 @@ func (s *Server) fireCron(ctx context.Context, c Cron) {
 			text = reply
 		}
 	case "agent":
-		provider, _ := agentProvider()
+		provider, _, err := s.agentProvider()
+		if err != nil {
+			text = fmt.Sprintf("⚠ cron #%d failed: %v", c.ID, err)
+			break
+		}
 		if err := ensureAgentDir(); err != nil {
 			text = fmt.Sprintf("⚠ cron #%d failed: %v", c.ID, err)
 			break
 		}
 		var reply string
 		var u callUsage
-		var err error
+		err = nil
 		if provider == "openai" {
 			reply, _, u, err = runCodexAgent(ctx, "", c.Text)
 		} else {

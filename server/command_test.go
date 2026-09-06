@@ -122,6 +122,10 @@ func TestCommandCrons(t *testing.T) {
 func TestCommandAgentStart(t *testing.T) {
 	srv, store := newLLMTestServer(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	writeAgentFakes(t)
+	if err := store.SetConnected("llm:claude", true); err != nil {
+		t.Fatal(err)
+	}
 
 	reply := srv.handleMessage(context.Background(), "/agent")
 	if !strings.Contains(reply.Text, "agent session") || !strings.Contains(reply.Text, "claude") {
@@ -152,13 +156,20 @@ func TestCommandAgentStart(t *testing.T) {
 	}
 
 	// openai default → codex-powered agent
+	writeCreds(t, filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`)
+	if err := store.SetConnected("llm:openai", true); err != nil {
+		t.Fatal(err)
+	}
 	writeTestConfig(t, "default_llm: openai\n")
 	srv.handleMessage(context.Background(), "/agent")
 	if sess, _, _ := store.ActiveSession(); sess.Provider != "openai" {
 		t.Fatalf("ActiveSession = %+v; want openai agent", sess)
 	}
 
-	// gemini default falls back to claude, with a note
+	// gemini default falls back to the sole available agent provider, with a note
+	if err := store.SetConnected("llm:openai", false); err != nil {
+		t.Fatal(err)
+	}
 	writeTestConfig(t, "default_llm: gemini\n")
 	reply = srv.handleMessage(context.Background(), "/agent")
 	if !strings.Contains(reply.Text, "gemini") || !strings.Contains(reply.Text, "claude") {
@@ -169,11 +180,115 @@ func TestCommandAgentStart(t *testing.T) {
 	}
 }
 
+func newAgentSelectionTestServer(t *testing.T) (*Server, *Store) {
+	t.Helper()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("PATH", t.TempDir())
+	return NewServer(store, ""), store
+}
+
+// TestCommandAgentUsesSoleConnectedProvider reproduces the production bug:
+// with only Codex connected and no explicit default, /agent must not silently
+// create a Claude session that will fail later when the claude CLI is absent.
+func TestCommandAgentUsesSoleConnectedProvider(t *testing.T) {
+	srv, store := newAgentSelectionTestServer(t)
+	writeCreds(t, filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	if err := store.SetConnected("llm:openai", true); err != nil {
+		t.Fatal(err)
+	}
+
+	reply := srv.handleMessage(context.Background(), "/agent")
+	if !strings.Contains(reply.Text, "openai") {
+		t.Fatalf("/agent reply = %q; want openai", reply.Text)
+	}
+	sess, ok, err := store.ActiveSession()
+	if err != nil || !ok || !sess.Agent || sess.Provider != "openai" {
+		t.Fatalf("ActiveSession = %+v, %v, %v; want openai agent", sess, ok, err)
+	}
+}
+
+func TestCommandAgentUsesSoleClaudeCodeProvider(t *testing.T) {
+	srv, store := newAgentSelectionTestServer(t)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	if err := store.SetConnected("llm:claude", true); err != nil {
+		t.Fatal(err)
+	}
+
+	reply := srv.handleMessage(context.Background(), "/agent")
+	if !strings.Contains(reply.Text, "claude") {
+		t.Fatalf("/agent reply = %q; want claude", reply.Text)
+	}
+	if sess, ok, err := store.ActiveSession(); err != nil || !ok || sess.Provider != "claude" {
+		t.Fatalf("ActiveSession = %+v, %v, %v; want claude agent", sess, ok, err)
+	}
+}
+
+func TestCommandAgentRejectsConnectedProviderWithoutCLI(t *testing.T) {
+	srv, store := newAgentSelectionTestServer(t)
+	writeCreds(t, filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`)
+	if err := store.SetConnected("llm:openai", true); err != nil {
+		t.Fatal(err)
+	}
+
+	reply := srv.handleMessage(context.Background(), "/agent")
+	if !strings.Contains(reply.Text, "⚠") || !strings.Contains(reply.Text, "codex") || !strings.Contains(reply.Text, "CLI") {
+		t.Fatalf("/agent reply = %q; want actionable missing-codex error", reply.Text)
+	}
+	if _, ok, err := store.ActiveSession(); err != nil || ok {
+		t.Fatalf("ActiveSession exists = %v, err = %v; want no session", ok, err)
+	}
+}
+
+func TestCommandAgentExplicitProviderResolvesAmbiguity(t *testing.T) {
+	srv, store := newAgentSelectionTestServer(t)
+	writeAgentFakes(t)
+	writeCreds(t, filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`)
+	if err := store.SetConnected("llm:openai", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetConnected("llm:claude", true); err != nil {
+		t.Fatal(err)
+	}
+
+	reply := srv.handleMessage(context.Background(), "/agent @openai")
+	if !strings.Contains(reply.Text, "openai") || strings.Contains(reply.Text, "multiple") {
+		t.Fatalf("/agent @openai reply = %q; want explicit provider to win", reply.Text)
+	}
+	if sess, _, _ := store.ActiveSession(); sess.Provider != "openai" {
+		t.Fatalf("ActiveSession = %+v; want openai", sess)
+	}
+}
+
 // TestCommandAgentAtProvider: /agent @provider overrides the default; invalid
 // picks fail before any session is created.
 func TestCommandAgentAtProvider(t *testing.T) {
 	srv, store := newLLMTestServer(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	writeAgentFakes(t)
+	writeCreds(t, filepath.Join(".codex", "auth.json"), `{"OPENAI_API_KEY":"sk-x"}`)
+	if err := store.SetConnected("llm:openai", true); err != nil {
+		t.Fatal(err)
+	}
 
 	reply := srv.handleMessage(context.Background(), "/agent @openai")
 	if !strings.Contains(reply.Text, "openai") {

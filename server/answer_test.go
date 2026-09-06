@@ -150,6 +150,36 @@ func TestAnswerCLIBare(t *testing.T) {
 	}
 }
 
+func TestChatCLIResolvesLocalBin(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		bin      string
+	}{
+		{provider: "claude", bin: "claude"},
+		{provider: "openai", bin: "codex"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			t.Setenv("PATH", t.TempDir())
+			binDir := filepath.Join(home, ".local", "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			argsFile := filepath.Join(home, "args.txt")
+			if err := os.WriteFile(filepath.Join(binDir, tc.bin), []byte(chatFakeScript(tc.bin, argsFile)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			reply, _, err := runChatCLI(context.Background(), tc.provider, "ping")
+			if err != nil || strings.TrimSpace(reply) != "pong" {
+				t.Fatalf("runChatCLI = %q, %v; want pong via ~/.local/bin/%s", reply, err, tc.bin)
+			}
+		})
+	}
+}
+
 func writeTestConfig(t *testing.T, content string) {
 	t.Helper()
 	dir, _ := os.UserConfigDir()

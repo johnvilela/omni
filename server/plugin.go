@@ -149,7 +149,10 @@ func (s *Server) pluginReply(ctx context.Context, cmd, arg string) (tgReply, boo
 // the /agent shape, so the reply arrives async via the queue instead of
 // blocking the poll loop (an LLM turn would blow past pluginTimeout).
 func (s *Server) pluginAgentReply(ctx context.Context, c pluginCommand, arg string) tgReply {
-	provider, note := agentProvider()
+	provider, note, err := s.agentProvider()
+	if err != nil {
+		return tgReply{Text: "⚠ " + err.Error()}
+	}
 	sess, err := s.newSession(true, provider)
 	if err != nil {
 		return tgReply{Text: "⚠ " + err.Error()}

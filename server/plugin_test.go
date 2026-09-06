@@ -129,7 +129,14 @@ func TestPluginPromptCommandDispatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pluginsDir(), "pecunia.json"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir()) // the drain's vendor CLI exec must fail fast
+	agentBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(agentBin, "claude"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", agentBin) // available at dispatch; the drain fails fast
+	if err := store.SetConnected("llm:claude", true); err != nil {
+		t.Fatal(err)
+	}
 
 	reply := srv.handleMessage(context.Background(), "/pecunia-coach spent $12, forgot to log")
 	if !strings.Contains(reply.Text, "⏳ /pecunia_coach") {

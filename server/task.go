@@ -182,10 +182,13 @@ func (s *Server) runTaskAgent(ctx context.Context, prompt string) (string, error
 	if err := ensureAgentDir(); err != nil {
 		return "", err
 	}
-	provider, _ := agentProvider()
+	provider, _, err := s.agentProvider()
+	if err != nil {
+		return "", err
+	}
 	var reply string
 	var u callUsage
-	var err error
+	err = nil
 	if provider == "openai" {
 		reply, _, u, err = runCodexAgent(ctx, "", prompt)
 	} else {

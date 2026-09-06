@@ -140,6 +140,47 @@ func TestAgentAnswerCodex(t *testing.T) {
 	}
 }
 
+// TestAgentAnswerResolvesLocalBin locks the systemd install layout: user
+// services often lack ~/.local/bin on PATH, while both vendor CLIs commonly
+// live there. Claude Code and Codex must be resolved identically.
+func TestAgentAnswerResolvesLocalBin(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		bin      string
+	}{
+		{provider: "claude", bin: "claude"},
+		{provider: "openai", bin: "codex"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			store, err := OpenStore(filepath.Join(t.TempDir(), "omni.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { store.Close() })
+			srv := NewServer(store, "")
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+			t.Setenv("PATH", t.TempDir())
+			binDir := filepath.Join(home, ".local", "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			argsFile := filepath.Join(home, "args.txt")
+			if err := os.WriteFile(filepath.Join(binDir, tc.bin), []byte(chatFakeScript(tc.bin, argsFile)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			store.AddSession("s1", true, tc.provider)
+			sess, _, _ := store.Session("s1")
+
+			if reply := srv.agentAnswer(context.Background(), sess, "ping"); reply != "pong" {
+				t.Fatalf("agent reply = %q; want pong via ~/.local/bin/%s", reply, tc.bin)
+			}
+		})
+	}
+}
+
 // TestAgentAnswerSendFile: a TOOL:send_file line in the agent reply uploads
 // the file and the stored history keeps the 📎 confirmation, never the line.
 func TestAgentAnswerSendFile(t *testing.T) {

@@ -51,6 +51,15 @@ var errKeyRequired = apiError{"key_required"}
 
 var llmHTTP = &http.Client{Timeout: 15 * time.Second}
 
+// resolveVendorBin honors an explicitly configured PATH first, then falls
+// back to ~/.local/bin for systemd user services that omit it.
+func resolveVendorBin(name string) string {
+	if path, err := exec.LookPath(name); err == nil {
+		return path
+	}
+	return resolveBin(name)
+}
+
 func readJSONFile(path string, v any) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -114,7 +123,7 @@ func resolveLLM(provider, reqKey string) (source, key string) {
 		return "api_key", k
 	}
 	if provider == "claude" {
-		if _, err := exec.LookPath("claude"); err == nil {
+		if _, err := exec.LookPath(resolveVendorBin("claude")); err == nil {
 			return "claude-code", ""
 		}
 	}

@@ -251,7 +251,7 @@ func TestChatPromptCarriesFileTools(t *testing.T) {
 // run and the agent's answer replaces the TOOL line.
 func TestAnalyzeFileTool(t *testing.T) {
 	srv, _, _ := newMediaServer(t)
-	argsFile, _ := writeAgentFakes(t) // default llm unset → claude fake, replies pong
+	argsFile, _ := writeAgentFakes(t) // sole connected provider uses its fake CLI and replies pong
 	jpg := filepath.Join(filesDir(), "inbox", "x.jpg")
 	if err := os.MkdirAll(filepath.Dir(jpg), 0o700); err != nil {
 		t.Fatal(err)
