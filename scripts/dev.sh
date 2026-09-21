@@ -34,6 +34,7 @@ After=network-online.target
 
 [Service]
 ExecStart=%h/.local/bin/omni-dev-server
+Environment=OMNI_AI_MEMORY_URL=http://127.0.0.1:49374
 Restart=on-failure
 
 [Install]

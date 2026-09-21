@@ -1,19 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
 
-// Plans are wiki pages in memoria's global wiki: no SQL table, the frontmatter
-// (status: active|done, tag "long") is the whole state machine. /plan runs an
+// Plans are pinned ai-memory pages: no SQL table, body status and the "long"
+// tag are the whole state machine. /plan runs an
 // interview in the chat session; plan_save (approval-gated) writes the page and
 // nothing else; plan_start is the explicit go signal.
-const plansDir = "omni-bot/plans"
+const plansDir = "omni/plans"
 
 // planSlug reduces a plan title to a filename slug.
 func planSlug(title string) string {
@@ -25,8 +25,8 @@ func planSlug(title string) string {
 }
 
 // planPath is the page's absolute path for one slug.
-func planPath(wiki, slug string) string {
-	return filepath.Join(wiki, plansDir, slug+".md")
+func planPath(slug string) string {
+	return plansDir + "/" + slug + ".md"
 }
 
 // planMeta scrapes the two facts the server cares about from a page's
@@ -36,39 +36,37 @@ func planMeta(raw string) (done, long bool) {
 	if rest, ok := strings.CutPrefix(raw, "---\n"); ok {
 		fm, _, _ = strings.Cut(rest, "\n---")
 	}
-	return strings.Contains(fm, "status: done"), strings.Contains(fm, "long")
+	return strings.Contains(strings.ToLower(fm), "status: done"), strings.Contains(strings.ToLower(fm), "#long")
 }
 
 // plansPrompt is the saved-plans section injected into every chat prompt: the
 // live plan list plus the start contract. Sibling of cronPrompt/taskPrompt.
-func plansPrompt() string {
+func (s *Server) plansPrompt(ctx context.Context) string {
 	var b strings.Builder
 	b.WriteString("## Plans\n\nSaved plans:\n")
 	n := 0
-	if wiki := memoriaWiki(); wiki != "" {
-		if entries, err := os.ReadDir(filepath.Join(wiki, plansDir)); err == nil {
-			for _, e := range entries {
-				slug, ok := strings.CutSuffix(e.Name(), ".md")
-				if !ok {
-					continue
-				}
-				raw, err := os.ReadFile(planPath(wiki, slug))
-				if err != nil {
-					continue
-				}
-				done, long := planMeta(string(raw))
-				status := "active"
-				if done {
-					status = "done"
-				}
-				line := "- " + slug + " · " + status
-				if long {
-					line += " · #long"
-				}
-				b.WriteString(line + "\n")
-				n++
-			}
+	var paths []string
+	if s.aiMemory != nil {
+		paths = s.aiMemory.searchPaths(ctx, "Omni saved plan", plansDir+"/")
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		slug := strings.TrimSuffix(strings.TrimPrefix(path, plansDir+"/"), ".md")
+		raw, err := s.aiMemory.readPage(ctx, path)
+		if err != nil {
+			continue
 		}
+		done, long := planMeta(raw)
+		status := "active"
+		if done {
+			status = "done"
+		}
+		line := "- " + slug + " · " + status
+		if long {
+			line += " · #long"
+		}
+		b.WriteString(line + "\n")
+		n++
 	}
 	if n == 0 {
 		b.WriteString("none yet\n")
@@ -158,10 +156,11 @@ func truncBytes(s string, n int) string {
 
 // dailyPlanPrompt is the agent prompt a started #long plan runs every day.
 func dailyPlanPrompt(path string) string {
-	return fmt.Sprintf(`Daily run of the plan at %s. Read that file FIRST. Execute today's next
-action from ## Steps, then update ## Progress in the file: what you did and
-how close ## Target is. Reply with a short progress report for the owner. If
-the target is now reached, set "status: done" in the file's frontmatter and
+	return fmt.Sprintf(`Daily run of ai-memory plan page %s. Call memory_read_page for that exact path FIRST. Execute today's next
+action from ## Steps, then call memory_write_page to update ## Progress: what
+you did and how close ## Target is. Preserve its tags and pinned status. Reply
+with a short progress report for the owner. If the target is now reached, set
+"Status: done" in the page and
 make the LAST line of your reply exactly:
 PLAN DONE`, path)
 }
@@ -184,8 +183,8 @@ func (s *Server) handlePlan(arg string) tgReply {
 	if arg == "" {
 		return tgReply{Text: "usage: /plan <goal> — I'll interview you, then propose a plan for approval"}
 	}
-	if memoriaWiki() == "" {
-		return tgReply{Text: "⚠ memoria not set up — run: memoria bootstrap --global"}
+	if s.aiMemory == nil {
+		return tgReply{Text: "⚠ ai-memory is not running — rerun scripts/install.sh"}
 	}
 	sess, err := s.ensureSession()
 	if err != nil {

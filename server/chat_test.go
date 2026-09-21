@@ -240,7 +240,7 @@ func TestChatAnswerBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 20 usable tokens on top of the constant tool-section overhead
-	overhead := estTokens("\n\n" + cronPrompt(store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(store) + "\n\n" + plansPrompt() + "\n\n" + corePrompt(memoriaWiki(), Session{}))
+	overhead := estTokens("\n\n" + cronPrompt(store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(store) + "\n\n" + srv.plansPrompt(context.Background()) + "\n\n" + srv.corePrompt(context.Background(), Session{}))
 	if err := os.WriteFile(filepath.Join(dir, app, "config.yaml"),
 		[]byte(fmt.Sprintf("token_budget: %d\n", overhead+20)), 0o600); err != nil {
 		t.Fatal(err)
@@ -264,9 +264,9 @@ func TestChatAnswerBudget(t *testing.T) {
 	if strings.Contains(second, long) || !strings.Contains(second, "assistant: pong") {
 		t.Fatalf("budget walk kept the wrong turns: %q", second)
 	}
-	// no memoria wiki → compaction never fires, watermark untouched
+	// no ai-memory client → compaction never fires, watermark untouched
 	if sess, _, _ := store.ActiveSession(); sess.ConsolidatedUntil != 0 {
-		t.Fatalf("consolidated_until = %d without memoria; want 0", sess.ConsolidatedUntil)
+		t.Fatalf("consolidated_until = %d without ai-memory; want 0", sess.ConsolidatedUntil)
 	}
 }
 

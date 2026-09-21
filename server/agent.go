@@ -49,18 +49,19 @@ after ~15 minutes — for long jobs, do a useful chunk and report progress so
 the owner can say "continue". If a task is ambiguous or destructive beyond
 what was asked, ask a short question before acting instead of guessing.
 
-## Memory (memoria MCP)
+## Memory (ai-memory MCP)
 
-The memoria wiki is your long-term memory across sessions:
+ai-memory is your long-term memory across sessions:
 
-- memoria_search before any non-trivial task — past decisions, gotchas and
+- memory_query before any non-trivial task — past decisions, gotchas and
   rules about this machine and the owner's projects live there.
-- memoria_write_page the moment you learn something durable (a decision, a
-  gotcha, a credential location, a rule the owner states) — unsaved findings
-  die with the session.
-- memoria_recall to revisit what an earlier session did.
+- memory_write_page when the owner explicitly asks to remember something
+  durable. Put project rules in AGENTS.md instead of duplicating them.
+- memory_read_page to revisit a full page returned by search.
+- memory_handoff_begin when the owner ends a session and wants continuity.
 
-Sessions are captured automatically by hooks — no manual logging needed.
+Sessions and tool activity are captured automatically by hooks. Do not log
+routine activity manually.
 
 ## Browser
 
@@ -80,6 +81,19 @@ Never post, comment, message, or send connection requests directly. Draft the
 content, reply with the draft, and act only after the owner explicitly
 approves in a later message. Reading, searching and browsing are fine.
 ` + "\n" + sendFileContract + "\n" + taskContract
+
+const memoryContract = `## Memory (ai-memory MCP)
+
+ai-memory is your long-term memory across sessions:
+
+- Call memory_query before non-trivial work.
+- Call memory_read_page when a search result needs full context.
+- Call memory_write_page only when the owner explicitly asks to remember a
+  durable fact. Put standing project rules in AGENTS.md instead.
+
+Sessions and tool activity are captured automatically by hooks. Do not log
+routine activity manually.
+`
 
 // sendFileContract teaches the agent the file exchange over telegram; also
 // appended to pre-existing workspaces by ensureAgentDir.
@@ -139,8 +153,15 @@ func ensureAgentDir() error {
 		if err != nil {
 			continue
 		}
-		orig := len(raw)
+		orig := string(raw)
+		if start := strings.Index(string(raw), "## Memory (memoria MCP)"); start >= 0 {
+			if relEnd := strings.Index(string(raw[start:]), "\n## Browser"); relEnd >= 0 {
+				end := start + relEnd
+				raw = []byte(string(raw[:start]) + memoryContract + string(raw[end:]))
+			}
+		}
 		for _, c := range []struct{ marker, section string }{
+			{"memory_query", memoryContract},
 			{"send_file", sendFileContract},
 			{"task_start", taskContract},
 		} {
@@ -149,7 +170,7 @@ func ensureAgentDir() error {
 			}
 			raw = append(raw, []byte("\n"+c.section)...)
 		}
-		if len(raw) == orig {
+		if string(raw) == orig {
 			continue
 		}
 		if err := os.WriteFile(path, raw, 0o644); err != nil {
@@ -160,7 +181,7 @@ func ensureAgentDir() error {
 }
 
 // agentAnswer continues an agent session: the vendor CLI runs un-bare (user
-// settings, tools, memoria hooks) in the workspace and carries its own
+// settings, tools, ai-memory hooks) in the workspace and carries its own
 // conversation state, so the raw text goes straight through — no composed
 // history, no memory injection, no compaction.
 func (s *Server) agentAnswer(ctx context.Context, sess Session, text string) string {
@@ -178,12 +199,7 @@ func (s *Server) agentAnswer(ctx context.Context, sess Session, text string) str
 	send := text + personalityMarker() // style rides the wire; history keeps the owner's words
 	var reply, vendorID string
 	var u callUsage
-	switch sess.Provider {
-	case "openai":
-		reply, vendorID, u, err = runCodexAgent(ctx, sess.VendorSessionID, send)
-	default:
-		reply, vendorID, u, err = runClaudeAgent(ctx, sess.VendorSessionID, send)
-	}
+	reply, vendorID, u, err = s.runAgentModel(ctx, sess.ID, "agent", sess.Provider, sess.VendorSessionID, send)
 	if err != nil {
 		return "⚠ " + err.Error()
 	}
@@ -322,4 +338,23 @@ func runCodexAgent(ctx context.Context, vendorID, text string) (reply, newVendor
 		return "", "", callUsage{}, err
 	}
 	return string(raw), newVendorID, u, nil
+}
+
+var (
+	runClaudeAgentCall = runClaudeAgent
+	runCodexAgentCall  = runCodexAgent
+)
+
+// runAgentModel is the single capture boundary for every vendor-agent call
+// Omni starts, including sessions, tasks, crons and file analysis.
+func (s *Server) runAgentModel(ctx context.Context, sessionID, purpose, provider, vendorID, text string) (reply, newVendorID string, u callUsage, err error) {
+	if provider == "openai" {
+		reply, newVendorID, u, err = runCodexAgentCall(ctx, vendorID, text)
+	} else {
+		reply, newVendorID, u, err = runClaudeAgentCall(ctx, vendorID, text)
+	}
+	if s.aiMemory != nil {
+		s.aiMemory.captureCall(ctx, sessionID, purpose, text, reply, err)
+	}
+	return
 }

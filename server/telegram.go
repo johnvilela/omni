@@ -181,6 +181,7 @@ func (t *Telegram) registerCommands(ctx context.Context, extra []map[string]stri
 		{"command": "ops", "description": "quick actions — status, doctor, logs, disk, restart, update"},
 		{"command": "plan", "description": "plan a goal — interview, approve, saved to the wiki"},
 		{"command": "memory", "description": "save one durable fact to core memory — /memory <text>"},
+		{"command": "memory_retention", "description": "set raw AI interaction retention — e.g. 30d"},
 	}, extra...)}, nil)
 }
 

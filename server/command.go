@@ -88,6 +88,20 @@ func (s *Server) handleMessage(ctx context.Context, text string) tgReply {
 		return s.handlePlan(arg)
 	case "/memory":
 		return s.handleMemory(arg)
+	case "/memory-retention", "/memory_retention":
+		v := strings.TrimSpace(arg)
+		if v == "" {
+			return tgReply{Text: fmt.Sprintf("🧠 raw AI interaction retention: %d days", memoryRetentionDays(readConfig()))}
+		}
+		daysText, ok := strings.CutSuffix(v, "d")
+		days, err := strconv.Atoi(daysText)
+		if !ok || err != nil || days < 1 || days > 3650 {
+			return tgReply{Text: "usage: /memory_retention <days>d — example: /memory_retention 30d"}
+		}
+		if err := setMemoryRetention(days); err != nil {
+			return tgReply{Text: "⚠ memory retention: " + err.Error()}
+		}
+		return tgReply{Text: fmt.Sprintf("🧠 raw AI interaction retention set to %d days", days)}
 	}
 	// installed plugin commands come after the built-ins (which always win)
 	// and before the LLM fall-through, so unknown slash text still chats

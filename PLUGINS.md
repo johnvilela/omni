@@ -150,9 +150,9 @@ MCP tools and skills are available) whose first message is the prompt.
 
 - Anything the user types after the command is appended **raw** — one line,
   `Owner's message: <text>`, punctuation intact, no word-splitting.
-- Omni then appends its own context: where plan pages live (when memoria is
-  set up) and the scheduled-jobs contract with the current job list — so the
-  session can write plan pages with its file tools and manage crons by
+- Omni then appends its own context: where plan pages live in ai-memory and
+  the scheduled-jobs contract with the current job list — so the session can
+  update plans with `memory_read_page` / `memory_write_page` and manage crons by
   emitting `TOOL:cron_add` / `TOOL:cron_edit` / `TOOL:cron_delete` lines.
 - The command replies `⏳ /<name> running (<provider>)` immediately; the real
   answer arrives asynchronously through the session queue under the agent cap

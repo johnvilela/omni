@@ -175,10 +175,7 @@ func pluginAgentText(c pluginCommand, arg string, store *Store) string {
 	if arg != "" {
 		b.WriteString("\n\nOwner's message: " + arg)
 	}
-	if wiki := memoriaWiki(); wiki != "" {
-		fmt.Fprintf(&b, "\n\nPlan pages live at %s — markdown with `status: active|done` frontmatter; edit them with your file tools.",
-			filepath.Join(wiki, plansDir, "<slug>.md"))
-	}
+	fmt.Fprintf(&b, "\n\nPlan pages live in ai-memory under %s/<slug>.md. Use memory_read_page and memory_write_page; set `Status: active|done` in the body.", plansDir)
 	b.WriteString("\n\n" + cronPrompt(store))
 	return b.String()
 }

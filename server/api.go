@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -19,8 +20,9 @@ type channelStatus struct {
 
 // Server owns the channel state and the localhost HTTP API.
 type Server struct {
-	store   *Store
-	apiBase string
+	store    *Store
+	apiBase  string
+	aiMemory *aiMemoryClient
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -51,13 +53,17 @@ type Server struct {
 }
 
 func NewServer(store *Store, telegramAPIBase string) *Server {
-	return &Server{
+	s := &Server{
 		store:       store,
 		apiBase:     telegramAPIBase,
 		taskCancel:  map[int64]context.CancelFunc{},
 		taskWorkers: map[int64]int{},
 		agentSem:    make(chan struct{}, maxTaskAgents),
 	}
+	if endpoint := os.Getenv("OMNI_AI_MEMORY_URL"); endpoint != "" {
+		s.aiMemory = newAIMemoryClient(endpoint)
+	}
+	return s
 }
 
 func (s *Server) telegramStatus() channelStatus {

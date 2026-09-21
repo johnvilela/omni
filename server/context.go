@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,10 +27,7 @@ func (s *Server) showContext() tgReply {
 		return tgReply{Text: agentContext(sess, history)}
 	}
 	persona := readPersona() + "\n\n" + cronPrompt(s.store)
-	var memory string
-	if wiki := memoriaWiki(); wiki != "" {
-		memory = readMemory(wiki)
-	}
+	memory := s.readMemory(context.Background())
 	provider := s.chatProvider(sess)
 	budget, clamped := chatBudget(provider)
 	text := chatContext(persona, memory, history, budget)

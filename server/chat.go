@@ -198,19 +198,18 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 	if _, err := s.store.AddMessage(sess.ID, "user", text, time.Now().Unix()); err != nil {
 		return "", err
 	}
-	wiki := memoriaWiki()
 	var memory string
-	if wiki != "" {
-		memory = readMemory(wiki)
+	if s.aiMemory != nil {
+		memory = s.aiMemory.recall(ctx, text)
 	}
 	persona := readPersona() + "\n\n" + cronPrompt(s.store) + "\n\n" + filePrompt() + "\n\n" + taskPrompt(s.store) +
-		"\n\n" + plansPrompt() + "\n\n" + corePrompt(wiki, sess)
+		"\n\n" + s.plansPrompt(ctx) + "\n\n" + s.corePrompt(ctx, sess)
 	if sess.Plan {
 		persona += "\n\n" + planContract()
 	}
 	budget, _ := chatBudget(s.chatProvider(sess))
 	prompt, dropped := composePrompt(persona, memory, history, text, budget)
-	reply, err := s.answerWith(ctx, sess.Provider, prompt)
+	reply, err := s.answerWith(withAICall(ctx, sess.ID, "chat"), sess.Provider, prompt)
 	if err != nil {
 		return "", err
 	}
@@ -248,7 +247,7 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 		// read_file in the follow-up itself still lands a turn late.
 		followup := prompt + "\n\nassistant: " + reply +
 			"\n\nThe 📄 lines above are the file contents you asked for. Answer the user's message now using them; do not emit TOOL:read_file again."
-		if more, err := s.answerWith(ctx, sess.Provider, followup); err == nil && strings.TrimSpace(more) != "" {
+		if more, err := s.answerWith(withAICall(ctx, sess.ID, "chat.followup"), sess.Provider, followup); err == nil && strings.TrimSpace(more) != "" {
 			if len(gatedNames(more)) > 0 {
 				// round 1 ran (📄 dumps); persist it, then gate round 2 — file
 				// contents are untrusted input, this round must not skip the gate
@@ -271,7 +270,7 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 			overflow = append(overflow, m)
 		}
 	}
-	if wiki != "" && len(overflow) > 0 && s.digesting.CompareAndSwap(false, true) {
+	if s.aiMemory != nil && len(overflow) > 0 && s.digesting.CompareAndSwap(false, true) {
 		go s.onCompaction(sess.ID, overflow)
 	}
 	return visible, nil
@@ -283,7 +282,7 @@ func (s *Server) chatAnswer(ctx context.Context, sess Session, text string) (str
 func (s *Server) nameSession(id, firstMsg string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	title, err := s.Answer(ctx, "Title this conversation in 3-5 words. Reply with the title only, no quotes.\n\n"+firstMsg)
+	title, err := s.Answer(withAICall(ctx, id, "session.title"), "Title this conversation in 3-5 words. Reply with the title only, no quotes.\n\n"+firstMsg)
 	if err != nil {
 		return
 	}

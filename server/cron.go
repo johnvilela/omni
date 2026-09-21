@@ -139,7 +139,7 @@ func (s *Server) fireCron(ctx context.Context, c Cron) {
 	case "prompt":
 		budget, _ := chatBudget(s.chatProvider(Session{})) // Answer uses the default llm
 		prompt, _ := composePrompt(readPersona(), "", nil, c.Text, budget)
-		reply, err := s.Answer(ctx, prompt)
+		reply, err := s.Answer(withAICall(ctx, fmt.Sprintf("cron-%d", c.ID), "cron.prompt"), prompt)
 		if err != nil {
 			text = fmt.Sprintf("⚠ cron #%d failed: %v", c.ID, err)
 		} else {
@@ -157,12 +157,7 @@ func (s *Server) fireCron(ctx context.Context, c Cron) {
 		}
 		var reply string
 		var u callUsage
-		err = nil
-		if provider == "openai" {
-			reply, _, u, err = runCodexAgent(ctx, "", c.Text)
-		} else {
-			reply, _, u, err = runClaudeAgent(ctx, "", c.Text)
-		}
+		reply, _, u, err = s.runAgentModel(ctx, fmt.Sprintf("cron-%d", c.ID), "cron.agent", provider, "", c.Text)
 		if err != nil {
 			text = fmt.Sprintf("⚠ cron #%d failed: %v", c.ID, err)
 			break

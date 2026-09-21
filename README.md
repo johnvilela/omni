@@ -44,7 +44,7 @@ One command on a bare machine — it downloads the latest release for your CPU a
 curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install.sh | bash
 ```
 
-The installer fetches the three static binaries (`omni`, `omni-server`, `omni-guardian`) from the [latest GitHub release](https://github.com/johnvilela/omni/releases/latest), verifies them against the release's `checksums.txt`, installs them into `~/.local/bin`, and enables two systemd user units: `omni-server.service` (the always-on hub) and `omni-guardian.timer` (the watchdog). It also enables login lingering so the server keeps running after you log out of a headless box. Re-running it later upgrades in place.
+The installer fetches three static Omni binaries from the [latest GitHub release](https://github.com/johnvilela/omni/releases/latest), verifies checksums, and enables the server and guardian user units. It also sets up one local ai-memory service for chat and agent capture. Embeddings and background improvement are disabled for a 4 GB/HDD machine. Login lingering keeps services running after logout. Re-running the installer upgrades Omni in place.
 
 ```sh
 systemctl --user status omni-server   # should be active
@@ -55,7 +55,7 @@ Knobs, as environment variables in front of `bash`:
 | Variable | Effect |
 |---|---|
 | `OMNI_VERSION=v0.25.0` | install that release instead of the latest |
-| `OMNI_SKIP_DEPS=1` | skip the agent dependencies step (node, chromium, playwright, memoria) |
+| `OMNI_SKIP_DEPS=1` | skip browser-agent dependencies (node, Chromium, Playwright); ai-memory remains enabled |
 
 To remove omni again (it asks before deleting your config and database):
 
@@ -106,7 +106,9 @@ curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/unin
 | `omni guardian` | watchdog status, check interval and on/off |
 | `omni help` | show the help screen |
 
-In Telegram, plain messages get chat answers; slash commands drive the hub: `/new`, `/clear`, `/agent`, `/task`, `/tasks`, `/sessions`, `/usage`, `/context`, `/crons`, `/pin`, `/terminal`, `/interrupt`, `/ops`, `/plan`, `/memory`.
+In Telegram, plain messages get chat answers; slash commands drive the hub: `/new`, `/clear`, `/agent`, `/task`, `/tasks`, `/sessions`, `/usage`, `/context`, `/crons`, `/pin`, `/terminal`, `/interrupt`, `/ops`, `/plan`, `/memory`, `/memory_retention`.
+
+Every AI call Omni makes is captured locally by ai-memory with sanitization and size limits. Raw-observation pruning is set to 30 days by default; ai-memory prunes only sessions it has consolidated, so this is not a guaranteed deletion deadline. Durable `/memory` facts and plans remain pinned. View or change the setting from Telegram with `/memory_retention` or `/memory_retention 45d`.
 
 ## Plugins
 

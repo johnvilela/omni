@@ -92,11 +92,6 @@ func TestPluginCommandUnknown(t *testing.T) {
 // and the scheduled-jobs contract with the live job list.
 func TestPluginAgentText(t *testing.T) {
 	_, store := newToolsServer(t)
-	cfg := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", cfg)
-	if err := os.MkdirAll(filepath.Join(cfg, "memoria", "wiki"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	store.AddCron("0 9 * * *", "message", "[pecunia-coach] check in")
 
 	c := pluginCommand{Name: "pecunia_coach", Prompt: "You are the coach."}
@@ -106,7 +101,7 @@ func TestPluginAgentText(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Owner's message: spent $12,50 on lunch!",
-		filepath.Join(cfg, "memoria", "wiki", "omni-bot", "plans"),
+		"ai-memory under omni/plans/<slug>.md",
 		"## Scheduled jobs",
 		"[pecunia-coach] check in",
 	} {

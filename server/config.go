@@ -8,19 +8,20 @@ import (
 )
 
 type Config struct {
-	TelegramToken string `yaml:"telegram_token"`
-	OpenAIKey     string `yaml:"openai_key"`
-	AnthropicKey  string `yaml:"anthropic_key"`
-	GeminiKey     string `yaml:"gemini_key"`
-	DefaultLLM    string `yaml:"default_llm"`
-	OpenAIModel   string `yaml:"openai_model"`
-	ClaudeModel   string `yaml:"claude_model"`
-	GeminiModel   string `yaml:"gemini_model"`
-	OpenAIEffort  string `yaml:"openai_effort"`
-	ClaudeEffort  string `yaml:"claude_effort"`
-	GeminiEffort  string `yaml:"gemini_effort"`
-	TokenBudget   int    `yaml:"token_budget"` // chat history budget in est. tokens; 0 = default
-	Personality   string `yaml:"personality"`  // reply style: quiet | ultraquiet; unset/unknown = normal
+	TelegramToken       string `yaml:"telegram_token"`
+	OpenAIKey           string `yaml:"openai_key"`
+	AnthropicKey        string `yaml:"anthropic_key"`
+	GeminiKey           string `yaml:"gemini_key"`
+	DefaultLLM          string `yaml:"default_llm"`
+	OpenAIModel         string `yaml:"openai_model"`
+	ClaudeModel         string `yaml:"claude_model"`
+	GeminiModel         string `yaml:"gemini_model"`
+	OpenAIEffort        string `yaml:"openai_effort"`
+	ClaudeEffort        string `yaml:"claude_effort"`
+	GeminiEffort        string `yaml:"gemini_effort"`
+	TokenBudget         int    `yaml:"token_budget"`          // chat history budget in est. tokens; 0 = default
+	MemoryRetentionDays int    `yaml:"memory_retention_days"` // raw ai-memory observations; 0 = 30
+	Personality         string `yaml:"personality"`           // reply style: quiet | ultraquiet; unset/unknown = normal
 	// approval gate over privileged chat TOOL lines (server/approval.go);
 	// Approvals is a string so the zero value (unreadable config) stays gated
 	Approvals     string   `yaml:"approvals"`      // "off" disables the gate; anything else = on

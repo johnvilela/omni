@@ -4,45 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
-// Long-term memory lives in memoria's global wiki as one page the bot reads
-// into every prompt and rewrites at compaction time. omni talks to it with
-// plain file IO: memoria has no CLI write command, its page format is
-// trivial, and pages outside sessions/ never decay.
-const memoryPage = "omni-bot/memory.md"
-
-// memoriaWiki returns memoria's global wiki dir, or "" when memoria isn't
-// set up (`memoria bootstrap --global` not run) — every memory feature then
-// silently no-ops. Root: global_path from memoria's config.yaml, else the
-// memoria config dir itself.
-func memoriaWiki() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	root := filepath.Join(dir, "memoria")
-	var cfg struct {
-		GlobalPath string `yaml:"global_path"`
-	}
-	if data, err := os.ReadFile(filepath.Join(root, "config.yaml")); err == nil {
-		if yaml.Unmarshal(data, &cfg) == nil && cfg.GlobalPath != "" {
-			root = cfg.GlobalPath
-		}
-	}
-	wiki := filepath.Join(root, "wiki")
-	if fi, err := os.Stat(wiki); err != nil || !fi.IsDir() {
-		return ""
-	}
-	return wiki
-}
+const memoryPage = "omni/long-term.md"
 
 // stripFrontmatter returns the body after a leading ---\n...\n---\n block.
 func stripFrontmatter(s string) string {
@@ -57,23 +25,22 @@ func stripFrontmatter(s string) string {
 	return strings.TrimLeft(rest[i+5:], "\n")
 }
 
-// readMemory returns the memory page body, "" when absent.
-func readMemory(wiki string) string {
-	data, err := os.ReadFile(filepath.Join(wiki, memoryPage))
+func (s *Server) readMemory(ctx context.Context) string {
+	if s.aiMemory == nil {
+		return ""
+	}
+	body, err := s.aiMemory.readPage(ctx, memoryPage)
 	if err != nil {
 		return ""
 	}
-	return stripFrontmatter(string(data))
+	return body
 }
 
-// writeMemory writes the page in memoria's exact on-disk format (frontmatter
-// is memoria-owned: tags only).
-func writeMemory(wiki, body string) error {
-	path := filepath.Join(wiki, memoryPage)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+func (s *Server) writeMemory(ctx context.Context, body string) error {
+	if s.aiMemory == nil {
+		return fmt.Errorf("ai-memory is not running")
 	}
-	return os.WriteFile(path, []byte("---\ntags: [omni-bot]\n---\n\n"+body), 0o644)
+	return s.aiMemory.writePage(ctx, memoryPage, body, []string{"omni", "long-term"}, false)
 }
 
 // Core memory: owner-approved facts saved via /memory, one page per theme
@@ -81,11 +48,11 @@ func writeMemory(wiki, body string) error {
 // theme index plus the "general" page whole; other themes are loaded into a
 // session on demand (memory_load) and stick. onCompaction never touches
 // core/ — /memory facts are never condensed away.
-const coreDir = "omni-bot/core"
+const coreDir = "omni/core"
 
 // corePath is the page path for one theme slug.
-func corePath(wiki, theme string) string {
-	return filepath.Join(wiki, coreDir, theme+".md")
+func corePath(theme string) string {
+	return coreDir + "/" + theme + ".md"
 }
 
 // coreTheme normalizes a model- or owner-supplied theme name to a page slug;
@@ -95,17 +62,18 @@ func coreTheme(name string) string {
 }
 
 // coreThemes lists the saved theme slugs, lexicographic.
-func coreThemes(wiki string) []string {
-	entries, err := os.ReadDir(filepath.Join(wiki, coreDir))
-	if err != nil {
+func (s *Server) coreThemes(ctx context.Context) []string {
+	if s.aiMemory == nil {
 		return nil
 	}
 	var ts []string
-	for _, e := range entries {
-		if t, ok := strings.CutSuffix(e.Name(), ".md"); ok {
+	for _, path := range s.aiMemory.searchPaths(ctx, "Omni core memory theme", coreDir+"/") {
+		name := strings.TrimPrefix(path, coreDir+"/")
+		if t, ok := strings.CutSuffix(name, ".md"); ok {
 			ts = append(ts, t)
 		}
 	}
+	sort.Strings(ts)
 	return ts
 }
 
@@ -119,48 +87,40 @@ func countFacts(facts string) int {
 }
 
 // readCoreTheme returns one theme page's facts, "" when absent.
-func readCoreTheme(wiki, theme string) string {
-	data, err := os.ReadFile(corePath(wiki, theme))
+func (s *Server) readCoreTheme(ctx context.Context, theme string) string {
+	if s.aiMemory == nil {
+		return ""
+	}
+	body, err := s.aiMemory.readPage(ctx, corePath(theme))
 	if err != nil {
 		return ""
 	}
-	return stripFrontmatter(string(data))
+	return body
 }
 
 // appendCore adds one fact bullet to a theme page, creating it on first use.
-func appendCore(wiki, theme, fact string) error {
-	path := corePath(wiki, theme)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+func (s *Server) appendCore(ctx context.Context, theme, fact string) error {
+	body := s.readCoreTheme(ctx, theme)
+	if body == "" {
+		body = "# Omni core memory theme: " + theme + "\n"
 	}
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return os.WriteFile(path, []byte("---\ntags: [omni-bot]\n---\n\n- "+fact+"\n"), 0o644)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	_, werr := f.WriteString("- " + fact + "\n")
-	f.Close()
-	return werr
+	body = strings.TrimRight(body, "\n") + "\n\n- " + fact + "\n"
+	return s.aiMemory.writePage(ctx, corePath(theme), body, []string{"omni", "core", theme}, true)
 }
 
 // corePrompt is the core-memory section injected into every chat prompt: the
 // theme index, the always-on "general" facts plus the session's loaded
 // themes, and the load/save contracts.
-func corePrompt(wiki string, sess Session) string {
+func (s *Server) corePrompt(ctx context.Context, sess Session) string {
 	var b strings.Builder
 	b.WriteString("## Core memory\n\nOwner-approved durable facts — HIGHEST priority, they override anything\nelse you remember. Themes:\n")
-	themes := []string(nil)
-	if wiki != "" {
-		themes = coreThemes(wiki)
-	}
+	themes := s.coreThemes(ctx)
 	if len(themes) == 0 {
 		b.WriteString("none yet\n")
 	}
 	loaded := append([]string{"general"}, strings.Split(sess.Themes, ",")...)
 	for _, t := range themes {
-		facts := readCoreTheme(wiki, t)
+		facts := s.readCoreTheme(ctx, t)
 		if slices.Contains(loaded, t) && facts != "" {
 			fmt.Fprintf(&b, "- %s:\n%s", t, facts)
 		} else {
@@ -187,9 +147,8 @@ func (s *Server) handleMemory(arg string) tgReply {
 	if arg == "" {
 		return tgReply{Text: "usage: /memory [theme:] <text> — save one durable fact to core memory"}
 	}
-	wiki := memoriaWiki()
-	if wiki == "" {
-		return tgReply{Text: "⚠ memoria not set up — run: memoria bootstrap --global"}
+	if s.aiMemory == nil {
+		return tgReply{Text: "⚠ ai-memory is not running — rerun scripts/install.sh"}
 	}
 	sess, err := s.ensureSession()
 	if err != nil {
@@ -204,7 +163,7 @@ func (s *Server) handleMemory(arg string) tgReply {
 		defer cancel()
 		prompt := "Condense this into ONE durable fact about the owner: one short sentence, their language, no preamble or quotes."
 		if theme == "" {
-			themes := strings.Join(coreThemes(wiki), ", ")
+			themes := strings.Join(s.coreThemes(ctx), ", ")
 			if themes == "" {
 				themes = "none yet"
 			}
@@ -212,7 +171,7 @@ func (s *Server) handleMemory(arg string) tgReply {
 		} else {
 			prompt += " Reply with the fact only."
 		}
-		out, err := s.Answer(ctx, prompt+"\n\n"+text)
+		out, err := s.Answer(withAICall(ctx, sess.ID, "memory.condense"), prompt+"\n\n"+text)
 		if err != nil || strings.TrimSpace(out) == "" {
 			msg := "empty reply"
 			if err != nil {
@@ -252,13 +211,12 @@ func (s *Server) handleMemory(arg string) tgReply {
 // s.digesting.
 func (s *Server) onCompaction(sessionID string, overflow []Message) {
 	defer s.digesting.Store(false)
-	wiki := memoriaWiki()
-	if wiki == "" {
+	if s.aiMemory == nil {
 		return
 	}
 	var b strings.Builder
 	b.WriteString("You maintain the assistant's long-term memory page about its owner.\n\nCurrent page:\n")
-	if cur := readMemory(wiki); cur != "" {
+	if cur := s.readMemory(context.Background()); cur != "" {
 		b.WriteString(cur)
 	} else {
 		b.WriteString("(empty)")
@@ -271,11 +229,11 @@ func (s *Server) onCompaction(sessionID string, overflow []Message) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	body, err := s.Answer(ctx, b.String())
+	body, err := s.Answer(withAICall(ctx, sessionID, "memory.consolidate"), b.String())
 	if err != nil || body == "" {
 		return // never clobber the page with nothing; retries on the next overflow
 	}
-	if err := writeMemory(wiki, body); err != nil {
+	if err := s.writeMemory(ctx, body); err != nil {
 		return
 	}
 	// ponytail: a crash between the write above and this bump re-merges the

@@ -4,4 +4,4 @@
 - [[cli]] — CLI commands, layered per-command help, and the version-mismatch alert
 - [[openai-codex-backend]] — future: direct Codex-backend HTTP for openai oauth answers (why not now, how later)
 - [[tasks]] — deferred-work backlog: each item with the trigger that un-defers it (poller unblocking, codex backend, stale model list, gemini usage)
-- [[chatbot-memory]] — short-term per-chat SQLite buffer + memoria long-term layer for the telegram bot: implemented and shipped in v0.3.0 (store/chat/memory, tests green, memoria global mode bootstrapped); chat mode runs the vendor CLIs bare (no MCP/tools/user config), agent mode (`/agent`, v0.4.0) deliberately un-bare with full tools — see [[api]]
+- [[chatbot-memory]] — short-term per-chat SQLite buffer + ai-memory long-term layer; Omni captures all AI calls, chat retrieval is relevance-based, and `/memory` keeps themed owner approval. Chat mode runs vendor CLIs bare; agent mode runs them with tools — see [[api]]
