@@ -107,7 +107,7 @@ func installChecks() []check {
 
 	// agent stack — installed by install.sh's dependency block on any flavor
 	var stackMissing []string
-	for _, b := range []string{"node", "chromium", "playwright-cli", "memoria"} {
+	for _, b := range []string{"node", "chromium", "playwright-cli", "ai-memory"} {
 		found := have(b)
 		if b == "chromium" {
 			found = have("chromium", "chromium-browser")
@@ -117,7 +117,7 @@ func installChecks() []check {
 		}
 	}
 	if len(stackMissing) == 0 {
-		cs = append(cs, check{name: "agent stack: node, chromium, playwright-cli, memoria", ok: true})
+		cs = append(cs, check{name: "agent stack: node, chromium, playwright-cli, ai-memory", ok: true})
 	} else {
 		cs = append(cs, check{name: "agent stack missing: " + strings.Join(stackMissing, ", "), fix: "scripts/install.sh"})
 	}

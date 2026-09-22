@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -79,15 +77,14 @@ func (s *Server) runTool(ctx context.Context, sessionID, name, args string) stri
 		if err := json.Unmarshal([]byte(args), &a); err != nil {
 			return "⚠ bad tool arguments: " + err.Error()
 		}
-		wiki := memoriaWiki()
-		if wiki == "" || a.Text == "" {
-			return "⚠ memory_save: memoria not set up or empty text"
+		if s.aiMemory == nil || a.Text == "" {
+			return "⚠ memory_save: ai-memory not running or empty text"
 		}
 		theme := coreTheme(a.Theme)
 		if theme == "" {
 			theme = "general"
 		}
-		if err := appendCore(wiki, theme, a.Text); err != nil {
+		if err := s.appendCore(ctx, theme, a.Text); err != nil {
 			return "⚠ memory_save: " + err.Error()
 		}
 		return fmt.Sprintf("🧠 core memory saved under %s: %s", theme, a.Text)
@@ -99,13 +96,10 @@ func (s *Server) runTool(ctx context.Context, sessionID, name, args string) stri
 		if sessionID == "" {
 			return "⚠ memory_load: chat sessions only"
 		}
-		wiki, theme := memoriaWiki(), coreTheme(a.Theme)
-		facts := ""
-		if wiki != "" {
-			facts = readCoreTheme(wiki, theme)
-		}
+		theme := coreTheme(a.Theme)
+		facts := s.readCoreTheme(ctx, theme)
 		if facts == "" {
-			return fmt.Sprintf("⚠ memory_load: no theme %q — themes: %s", a.Theme, strings.Join(coreThemes(wiki), ", "))
+			return fmt.Sprintf("⚠ memory_load: no theme %q — themes: %s", a.Theme, strings.Join(s.coreThemes(ctx), ", "))
 		}
 		sess, ok, err := s.store.Session(sessionID)
 		if err != nil || !ok {
@@ -130,19 +124,19 @@ func (s *Server) runTool(ctx context.Context, sessionID, name, args string) stri
 		if err := json.Unmarshal([]byte(args), &a); err != nil {
 			return "⚠ bad tool arguments: " + err.Error()
 		}
-		wiki := memoriaWiki()
-		if wiki == "" || a.Body == "" {
-			return "⚠ plan_save: memoria not set up or empty body"
+		if s.aiMemory == nil || a.Body == "" {
+			return "⚠ plan_save: ai-memory not running or empty body"
 		}
 		slug := planSlug(a.Title)
-		path := planPath(wiki, slug)
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return "⚠ plan_save: " + err.Error()
+		path := planPath(slug)
+		tags := append([]string{"omni", "plan"}, a.Tags...)
+		long := ""
+		if slices.Contains(a.Tags, "long") {
+			long = "\n#long"
 		}
-		tags := append([]string{"omni-bot", "plan"}, a.Tags...)
-		page := fmt.Sprintf("---\ntags: [%s]\nstatus: active\ncreated: %s\n---\n\n%s\n",
-			strings.Join(tags, ", "), time.Now().Format("2006-01-02"), strings.TrimSpace(a.Body))
-		if err := os.WriteFile(path, []byte(page), 0o644); err != nil {
+		page := fmt.Sprintf("# Omni saved plan: %s\n\nStatus: active\nCreated: %s%s\n\n%s\n",
+			slug, time.Now().Format("2006-01-02"), long, strings.TrimSpace(a.Body))
+		if err := s.aiMemory.writePage(ctx, path, page, tags, true); err != nil {
 			return "⚠ plan_save: " + err.Error()
 		}
 		return fmt.Sprintf("📋 plan saved — %s/%s (start it anytime: just ask)", plansDir, slug)
@@ -151,17 +145,16 @@ func (s *Server) runTool(ctx context.Context, sessionID, name, args string) stri
 		if err := json.Unmarshal([]byte(args), &a); err != nil {
 			return "⚠ bad tool arguments: " + err.Error()
 		}
-		wiki := memoriaWiki()
-		if wiki == "" {
-			return "⚠ plan_start: memoria not set up"
+		if s.aiMemory == nil {
+			return "⚠ plan_start: ai-memory not running"
 		}
 		slug := planSlug(a.Slug)
-		path := planPath(wiki, slug)
-		raw, err := os.ReadFile(path)
+		path := planPath(slug)
+		raw, err := s.aiMemory.readPage(ctx, path)
 		if err != nil {
 			return fmt.Sprintf("⚠ plan %s not found", slug)
 		}
-		done, long := planMeta(string(raw))
+		done, long := planMeta(raw)
 		if done {
 			return fmt.Sprintf("⚠ plan %s is already done", slug)
 		}
@@ -172,7 +165,7 @@ func (s *Server) runTool(ctx context.Context, sessionID, name, args string) stri
 			}
 			return fmt.Sprintf("⏰ #%d — daily agent job for plan %s (09:00; change it via the scheduled jobs)", id, slug)
 		}
-		id, err := s.startTask("Execute the plan at " + path + ": read it FIRST, work through ## Steps, keep ## Progress updated in the file, and set \"status: done\" in its frontmatter when ## Target is reached.")
+		id, err := s.startTask("Execute ai-memory plan page " + path + ": use memory_read_page first, work through ## Steps, and use memory_write_page to keep ## Progress updated. Set `Status: done` when ## Target is reached.")
 		if err != nil {
 			return "⚠ plan_start: " + err.Error()
 		}

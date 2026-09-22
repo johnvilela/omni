@@ -16,7 +16,8 @@ import (
 // (and nothing starts), plan_start on a #long plan registers the daily cron.
 func TestPlanFlow(t *testing.T) {
 	srv, store, rec, calls := newApprovalTestServer(t)
-	wiki := mkMemoriaWiki(t)
+	memory, pages := newAIMemoryFake(t)
+	srv.aiMemory = memory
 	sess := seedSession(t, srv)
 
 	rec.reply = "Great goal!\nTOOL:ask {\"question\":\"What pace?\",\"options\":[\"slow\",\"fast\"]}"
@@ -44,15 +45,15 @@ func TestPlanFlow(t *testing.T) {
 		t.Fatalf("option tap = %+v; want echo with buttons stripped", r)
 	}
 	waitFor(t, func() bool { _, ok, _ := store.Proposal(1); return ok })
-	page := planPath(wiki, "run-a-marathon")
-	if _, err := os.Stat(page); err == nil {
+	page := planPath("run-a-marathon")
+	if pages.Get(page) != "" {
 		t.Fatal("plan written before approval")
 	}
 
 	srv.gatedCallback(context.Background(), 42, "appr:1")
-	waitFor(t, func() bool { _, err := os.Stat(page); return err == nil })
-	raw, _ := os.ReadFile(page)
-	if !strings.Contains(string(raw), "status: active") || !strings.Contains(string(raw), "long") {
+	waitFor(t, func() bool { return pages.Get(page) != "" })
+	raw := pages.Get(page)
+	if !strings.Contains(raw, "Status: active") || !strings.Contains(raw, "#long") {
 		t.Fatalf("plan page = %q; want active status + long tag", raw)
 	}
 	waitFor(t, func() bool { got, _, _ := store.Session(sess.ID); return !got.Plan })

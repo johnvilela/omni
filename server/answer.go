@@ -67,6 +67,10 @@ func (s *Server) answerWith(ctx context.Context, provider, text string) (string,
 	case "claude-code":
 		reply, u, err = runChatCLI(ctx, "claude", text)
 	}
+	if s.aiMemory != nil {
+		call := aiCallFrom(ctx)
+		s.aiMemory.captureCall(ctx, call.sessionID, call.purpose, text, reply, err)
+	}
 	if err != nil {
 		return "", err
 	}

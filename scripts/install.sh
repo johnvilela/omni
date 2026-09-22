@@ -10,7 +10,7 @@
 # Safe to re-run: it overwrites the binaries and restarts the service, so a
 # re-run is an upgrade. Knobs (env vars):
 #   OMNI_VERSION    release tag to install (default: the latest release)
-#   OMNI_SKIP_DEPS  set to 1 to skip the agent dependencies block at the end
+#   OMNI_SKIP_DEPS  set to 1 to skip browser-agent dependencies
 set -euo pipefail
 
 REPO=johnvilela/omni
@@ -110,6 +110,7 @@ After=network-online.target
 
 [Service]
 ExecStart=%h/.local/bin/omni-server
+Environment=OMNI_AI_MEMORY_URL=http://127.0.0.1:49374
 Restart=on-failure
 
 [Install]
@@ -141,8 +142,101 @@ OnUnitActiveSec=2min
 WantedBy=timers.target
 EOF
 
+
+# One local ai-memory process handles Omni capture and MCP requests. No
+# per-request process, local embedding model, or background LLM scheduler.
+step "ai-memory"
+AI_MEMORY_BIN=$(command -v ai-memory || true)
+if [ -z "$AI_MEMORY_BIN" ] && [ -x "$BIN/ai-memory" ]; then
+  AI_MEMORY_BIN="$BIN/ai-memory"
+fi
+if [ -z "$AI_MEMORY_BIN" ]; then
+  case "$ARCH" in
+    amd64) AI_ARCH=x86_64 ;;
+    arm64) AI_ARCH=aarch64 ;;
+  esac
+  AI_ASSET="ai-memory-linux-$AI_ARCH.tar.gz"
+  AI_BASE="https://github.com/akitaonrails/ai-memory/releases/latest/download"
+  if fetch "$AI_BASE/$AI_ASSET" "$STAGE/$AI_ASSET" \
+    && fetch "$AI_BASE/$AI_ASSET.sha256" "$STAGE/$AI_ASSET.sha256" \
+    && (cd "$STAGE" && sha256sum -c "$AI_ASSET.sha256" >/dev/null); then
+    AI_RUNTIME="${XDG_DATA_HOME:-$HOME/.local/share}/ai-memory/runtime"
+    mkdir -p "$AI_RUNTIME"
+    tar -xzf "$STAGE/$AI_ASSET" -C "$AI_RUNTIME"
+    ln -sf "$AI_RUNTIME/ai-memory" "$BIN/ai-memory"
+    AI_MEMORY_BIN="$BIN/ai-memory"
+  else
+    warn "could not download ai-memory"
+  fi
+fi
+
+MEMORY_READY=0
+if [ -n "$AI_MEMORY_BIN" ]; then
+  AI_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/ai-memory"
+  AI_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-memory"
+  OMNI_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omni"
+  mkdir -p "$AI_DATA" "$AI_CONFIG_DIR" "$OMNI_CONFIG_DIR"
+  if [ ! -f "$AI_CONFIG_DIR/config.toml" ]; then
+    "$AI_MEMORY_BIN" --data-dir "$AI_DATA" --config "$AI_CONFIG_DIR/config.toml" init \
+      || warn "ai-memory init failed"
+  fi
+  if [ ! -f "$OMNI_CONFIG_DIR/ai-memory.env" ]; then
+    printf '%s\n' 'AI_MEMORY_DECAY__OBSERVATION_RETENTION_DAYS=30' > "$OMNI_CONFIG_DIR/ai-memory.env"
+    chmod 600 "$OMNI_CONFIG_DIR/ai-memory.env"
+  fi
+
+  cat > "$UNIT_DIR/ai-memory.service" <<EOF
+[Unit]
+Description=ai-memory for Omni
+After=network-online.target
+
+[Service]
+ExecStart=$AI_MEMORY_BIN --data-dir %h/.local/share/ai-memory --config %h/.config/ai-memory/config.toml serve --transport http --bind 127.0.0.1:49374 --workspace omni --project assistant
+Environment=AI_MEMORY_CAPTURE_ASSISTANT=true
+Environment=AI_MEMORY_CONSOLIDATE_ON_SESSION_END=false
+Environment=AI_MEMORY_BACKFILL_ON_START=false
+Environment=AI_MEMORY_EMBEDDING_PROVIDER=none
+Environment=AI_MEMORY_AUTO_IMPROVE__SCHEDULER__ENABLED=false
+Environment=AI_MEMORY_MAINTENANCE__LINT_INTERVAL_SECS=0
+Environment=AI_MEMORY_MAINTENANCE__EMBEDDING_BACKFILL_INTERVAL_SECS=0
+EnvironmentFile=-%h/.config/omni/ai-memory.env
+Restart=on-failure
+Nice=10
+IOSchedulingClass=idle
+MemoryHigh=384M
+MemoryMax=512M
+TasksMax=64
+
+[Install]
+WantedBy=default.target
+EOF
+
+  AGENT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omni/agent"
+  mkdir -p "$AGENT_DIR/chrome-profile"
+  if [ ! -f "$AGENT_DIR/.ai-memory.toml" ]; then
+    cat > "$AGENT_DIR/.ai-memory.toml" <<'EOF'
+workspace = "omni"
+project = "assistant"
+project_strategy = "repo-root"
+EOF
+  fi
+  "$AI_MEMORY_BIN" install-mcp --client claude-code --apply \
+    || warn "ai-memory MCP setup failed for claude-code"
+  "$AI_MEMORY_BIN" install-mcp --client codex --apply \
+    || warn "ai-memory MCP setup failed for codex"
+  "$AI_MEMORY_BIN" install-hooks --agent claude-code --capture-assistant --apply \
+    || warn "ai-memory hook setup failed for claude-code"
+  "$AI_MEMORY_BIN" install-hooks --agent codex --capture-assistant --apply \
+    || warn "ai-memory hook setup failed for codex"
+  MEMORY_READY=1
+fi
+
 SERVICES_OK=1
 if systemctl --user daemon-reload 2>/dev/null; then
+  if [ "$MEMORY_READY" = 1 ]; then
+    systemctl --user enable ai-memory.service
+    systemctl --user restart ai-memory.service
+  fi
   systemctl --user enable omni-server.service
   systemctl --user restart omni-server.service
   systemctl --user enable omni-guardian.timer
@@ -152,7 +246,7 @@ else
   SERVICES_OK=0
   warn "systemctl --user is not reachable (no user session bus?) — units written but not started"
   warn "log in with a full session (or: export XDG_RUNTIME_DIR=/run/user/\$(id -u)) and run:"
-  warn "  systemctl --user daemon-reload && systemctl --user enable --now omni-server.service omni-guardian.timer"
+  warn "  systemctl --user daemon-reload && systemctl --user enable --now omni-server.service omni-guardian.timer ai-memory.service"
 fi
 
 # a headless box: user services die at logout unless the user lingers
@@ -172,7 +266,7 @@ esac
 
 # --- agent dependencies --------------------------------------------------------
 if [ "${OMNI_SKIP_DEPS:-}" = 1 ]; then
-  step "skipping agent dependencies (OMNI_SKIP_DEPS=1)"
+  step "skipping browser-agent dependencies (OMNI_SKIP_DEPS=1)"
 else
 step "agent dependencies (idempotent; failures warn, never abort)"
 # package manager: node + chromium for the /agent browser playbook
@@ -205,21 +299,6 @@ fi
 AGENT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omni/agent"
 mkdir -p "$AGENT_DIR/chrome-profile"
 
-# memoria: long-term memory hooks for the vendor CLIs in agent mode
-if ! command -v memoria >/dev/null; then
-  M_URL=$(fetch "https://api.github.com/repos/johnvilela/memoria/releases/latest" \
-    | grep -o "https://[^\"]*memoria_linux_$ARCH" | head -n1) \
-    && [ -n "$M_URL" ] && fetch "$M_URL" "$BIN/memoria" && chmod 755 "$BIN/memoria" \
-    || warn "could not download memoria"
-fi
-if command -v memoria >/dev/null; then
-  memoria setup --client claude-code,codex --global \
-    || warn "memoria setup failed — run once by hand: memoria init --client claude-code,codex"
-  if ! memoria list 2>/dev/null | grep -q "$AGENT_DIR"; then
-    (cd "$AGENT_DIR" && memoria bootstrap --background) \
-      || warn "memoria bootstrap of the agent workspace failed"
-  fi
-fi
 fi
 
 # --- summary --------------------------------------------------------------------

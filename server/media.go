@@ -260,12 +260,7 @@ func (s *Server) analyzeFile(ctx context.Context, path, question string) string 
 	}
 	var reply string
 	var u callUsage
-	err = nil
-	if provider == "openai" {
-		reply, _, u, err = runCodexAgent(ctx, "", task)
-	} else {
-		reply, _, u, err = runClaudeAgent(ctx, "", task)
-	}
+	reply, _, u, err = s.runAgentModel(ctx, "", "file.analyze", provider, "", task)
 	if err != nil {
 		return "⚠ analyze_file: " + err.Error()
 	}

@@ -243,7 +243,7 @@ func TestEnsureAgentDirAppendsContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
-	if !strings.HasPrefix(string(raw), owned) || !strings.Contains(string(raw), "TOOL:send_file") {
+	if !strings.HasPrefix(string(raw), owned) || !strings.Contains(string(raw), "TOOL:send_file") || !strings.Contains(string(raw), "memory_query") {
 		t.Fatalf("AGENTS.md = %q; want owner text kept + contract appended", raw)
 	}
 	if err := ensureAgentDir(); err != nil { // idempotent
@@ -255,8 +255,25 @@ func TestEnsureAgentDirAppendsContract(t *testing.T) {
 	}
 	// the absent file was seeded fresh — the seed already carries the contract
 	seeded, _ := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
-	if !strings.Contains(string(seeded), "TOOL:send_file") {
-		t.Fatal("fresh seed missing the send_file contract")
+	if !strings.Contains(string(seeded), "TOOL:send_file") || !strings.Contains(string(seeded), "memory_query") || strings.Contains(string(seeded), "memoria_") {
+		t.Fatal("fresh seed missing ai-memory contract or still naming memoria")
+	}
+}
+
+func TestEnsureAgentDirReplacesLegacyMemoriaInstructions(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	dir := agentDir()
+	os.MkdirAll(dir, 0o700)
+	legacy := "# custom\n\n## Memory (memoria MCP)\n\n- memoria_search first\n\n## Browser\n\nkeep browser notes\n"
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		os.WriteFile(filepath.Join(dir, name), []byte(legacy), 0o644)
+	}
+	if err := ensureAgentDir(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if strings.Contains(string(raw), "memoria_") || !strings.Contains(string(raw), "memory_query") || !strings.Contains(string(raw), "keep browser notes") {
+		t.Fatalf("migrated instructions = %q", raw)
 	}
 }
 
