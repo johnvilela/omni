@@ -581,7 +581,7 @@ func runGuardianStatus() int {
 	case "disabled":
 		fmt.Println(dimStyle.Render("○ "+timer+" — disabled") + " · re-arm with " + cmdStyle.Render("omni guardian --enabled=true"))
 	default:
-		fmt.Println(dimStyle.Render("○ " + timer + " — not installed (run scripts/install.sh)"))
+		fmt.Println(dimStyle.Render("○ " + timer + " — not installed (run " + installScript() + ")"))
 	}
 
 	// active alerts = the guardian's persisted red checks
@@ -637,7 +637,7 @@ func runGuardianEnable(on bool) int {
 		action = "enable"
 	}
 	if out, err := systemctlUser(action, "--now", guardianTimer()); err != nil {
-		fmt.Fprintln(os.Stderr, errStyle.Render("systemctl "+action+" failed: "+out+" — is the guardian installed? (scripts/install.sh)"))
+		fmt.Fprintln(os.Stderr, errStyle.Render("systemctl "+action+" failed: "+out+" — is the guardian installed? ("+installScript()+")"))
 		return 1
 	}
 	if on {

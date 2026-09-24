@@ -61,12 +61,15 @@ func renderSection(title string, cs []check) string {
 	return s
 }
 
+// installOneLiner reinstalls the latest release without needing a checkout.
+const installOneLiner = "curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install.sh | sh"
+
 // installScript is the rebuild/reinstall fix for whichever flavor this is.
 func installScript() string {
 	if strings.HasSuffix(app, "-dev") {
 		return "scripts/dev.sh"
 	}
-	return "scripts/install.sh"
+	return installOneLiner
 }
 
 func have(names ...string) bool {
@@ -119,7 +122,7 @@ func installChecks() []check {
 	if len(stackMissing) == 0 {
 		cs = append(cs, check{name: "agent stack: node, chromium, playwright-cli, ai-memory", ok: true})
 	} else {
-		cs = append(cs, check{name: "agent stack missing: " + strings.Join(stackMissing, ", "), fix: "scripts/install.sh"})
+		cs = append(cs, check{name: "agent stack missing: " + strings.Join(stackMissing, ", "), fix: installOneLiner})
 	}
 
 	var vendorMissing []string
@@ -143,7 +146,7 @@ func installChecks() []check {
 	if _, err := os.Stat(filepath.Join(dataDir(), "agent", "chrome-profile")); err == nil {
 		cs = append(cs, check{name: "agent workspace with chrome profile", ok: true})
 	} else {
-		cs = append(cs, check{name: "agent workspace " + filepath.Join(dataDir(), "agent", "chrome-profile") + " missing", fix: "scripts/install.sh"})
+		cs = append(cs, check{name: "agent workspace " + filepath.Join(dataDir(), "agent", "chrome-profile") + " missing", fix: installOneLiner})
 	}
 
 	if _, err := os.Stat(filepath.Join(filepath.Dir(configPath()), "AGENTS.md")); err == nil {

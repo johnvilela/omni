@@ -363,7 +363,7 @@ func checkUpdates(repos []string) (r checkResult, omniTag string, definitive boo
 		stale = append(stale, entry)
 	}
 	if len(stale) > 0 {
-		return checkResult{name: "updates", detail: strings.Join(stale, ", ") + " — rerun scripts/install.sh"}, omniTag, true
+		return checkResult{name: "updates", detail: strings.Join(stale, ", ") + " — rerun the installer: curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install.sh | sh"}, omniTag, true
 	}
 	return checkResult{name: "updates", ok: true, detail: "watched packages current"}, omniTag, true
 }
