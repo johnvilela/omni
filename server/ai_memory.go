@@ -286,6 +286,14 @@ func (m *aiMemoryClient) capture(ctx context.Context, event, sourceEvent, sessio
 }
 
 var restartAIMemory = func() error {
+	if inContainer() {
+		// the entrypoint respawns ai-memory, re-reading ai-memory.env on the way
+		err := exec.Command("pkill", "-x", "ai-memory").Run()
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+			return nil // nothing to kill: it is already being respawned
+		}
+		return err
+	}
 	return exec.Command("systemctl", "--user", "restart", "ai-memory.service").Run()
 }
 

@@ -532,10 +532,30 @@ func runLLMModel(c *Client, provider, model, effort string) int {
 	return 0
 }
 
-// The guardian (<app>-guardian binary) runs as a systemd user timer; these
-// subcommands just drive systemctl locally — no server API involved.
+// The guardian (<app>-guardian binary) runs as a systemd user timer on a
+// host; these subcommands just drive systemctl locally — no server API
+// involved. In docker (OMNI_CONTAINER=1) it is a loop paced by
+// OMNI_GUARDIAN_INTERVAL, and the subcommands only point at .env.
 
 func guardianTimer() string { return app + "-guardian.timer" }
+
+// containerGuardianLine: no timer to ask in docker — the cadence is the env
+// the entrypoint started with, "running" is pgrep.
+func containerGuardianLine(every string, running bool) string {
+	switch {
+	case !running:
+		return dimStyle.Render("○ guardian loop not running") + " · " + cmdStyle.Render("docker compose logs omni")
+	case every == "0" || every == "off":
+		return dimStyle.Render("○ guardian disabled (OMNI_GUARDIAN_INTERVAL=off)") + " · set it to 2m in .env, then " + cmdStyle.Render("docker compose up -d")
+	}
+	return okStyle.Render("●") + " guardian — runs in-container every " + every
+}
+
+// containerGuardianHint: in docker the cadence is an env var, not a unit.
+func containerGuardianHint() int {
+	fmt.Fprintln(os.Stderr, errStyle.Render("in docker the guardian cadence is OMNI_GUARDIAN_INTERVAL in .env (e.g. 5m; off disables) — edit it, then: docker compose up -d"))
+	return 2
+}
 
 // dataDir is ~/.local/share/<app> (respects XDG_DATA_HOME).
 func dataDir() string {
@@ -572,16 +592,21 @@ func systemctlUser(args ...string) (string, error) {
 
 func runGuardianStatus() int {
 	timer := guardianTimer()
-	switch enabled, _ := systemctlUser("is-enabled", timer); enabled {
-	case "enabled":
-		fmt.Println(okStyle.Render("●") + " " + timer + " — enabled")
-		if line, err := systemctlUser("list-timers", timer, "--no-pager", "--no-legend"); err == nil && line != "" {
-			fmt.Println(dimStyle.Render("  " + line))
+	if inContainer() {
+		running := exec.Command("pgrep", "-x", app+"-guardian").Run() == nil
+		fmt.Println(containerGuardianLine(os.Getenv("OMNI_GUARDIAN_INTERVAL"), running))
+	} else {
+		switch enabled, _ := systemctlUser("is-enabled", timer); enabled {
+		case "enabled":
+			fmt.Println(okStyle.Render("●") + " " + timer + " — enabled")
+			if line, err := systemctlUser("list-timers", timer, "--no-pager", "--no-legend"); err == nil && line != "" {
+				fmt.Println(dimStyle.Render("  " + line))
+			}
+		case "disabled":
+			fmt.Println(dimStyle.Render("○ "+timer+" — disabled") + " · re-arm with " + cmdStyle.Render("omni guardian --enabled=true"))
+		default:
+			fmt.Println(dimStyle.Render("○ " + timer + " — not installed (run " + installScript() + ")"))
 		}
-	case "disabled":
-		fmt.Println(dimStyle.Render("○ "+timer+" — disabled") + " · re-arm with " + cmdStyle.Render("omni guardian --enabled=true"))
-	default:
-		fmt.Println(dimStyle.Render("○ " + timer + " — not installed (run scripts/install.sh)"))
 	}
 
 	// active alerts = the guardian's persisted red checks
@@ -597,6 +622,9 @@ func runGuardianStatus() int {
 }
 
 func runGuardianInterval(arg string) int {
+	if inContainer() {
+		return containerGuardianHint()
+	}
 	d, err := time.ParseDuration(arg)
 	if err != nil || d < 30*time.Second {
 		fmt.Fprintln(os.Stderr, errStyle.Render("interval must be a duration of at least 30s (e.g. 2m, 15m, 1h)"))
@@ -632,12 +660,15 @@ func runGuardianInterval(arg string) int {
 }
 
 func runGuardianEnable(on bool) int {
+	if inContainer() {
+		return containerGuardianHint()
+	}
 	action := "disable"
 	if on {
 		action = "enable"
 	}
 	if out, err := systemctlUser(action, "--now", guardianTimer()); err != nil {
-		fmt.Fprintln(os.Stderr, errStyle.Render("systemctl "+action+" failed: "+out+" — is the guardian installed? (scripts/install.sh)"))
+		fmt.Fprintln(os.Stderr, errStyle.Render("systemctl "+action+" failed: "+out+" — is the guardian installed? ("+installScript()+")"))
 		return 1
 	}
 	if on {

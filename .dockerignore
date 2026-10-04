@@ -1,0 +1,11 @@
+# allowlist: the four Go packages, the build script and the entrypoint — no
+# bin/ or dist/ binaries, no .git, no memory stores
+*
+!go.mod
+!go.sum
+!cli/
+!server/
+!guardian/
+!version/
+!scripts/build.sh
+!scripts/docker-entrypoint.sh

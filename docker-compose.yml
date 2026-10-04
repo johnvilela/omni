@@ -1,0 +1,22 @@
+# omni in one container. Quick start:
+#   curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install-docker.sh | bash
+# or by hand: cp .env.example .env, edit it, docker compose up -d
+# The installer adds a docker-compose.override.yml with your PC's claude/codex
+# binaries and ~/.claude ~/.codex ~/.gemini logins mounted in.
+services:
+  omni:
+    image: ghcr.io/johnvilela/omni:${OMNI_VERSION:-latest}
+    container_name: omni
+    hostname: omni            # chromium's profile lock records the hostname: keep it stable
+    user: "${OMNI_UID:-1000}:${OMNI_GID:-1000}"
+    restart: unless-stopped
+    init: true                # reaps orphaned chromium/agent processes, forwards signals
+    stop_grace_period: 30s
+    env_file: .env
+    ports:
+      - "127.0.0.1:${OMNI_PORT:-8787}:8787"   # loopback only: the api has no auth
+    volumes:
+      - omni-home:/home/omni  # config, db, plugins, cli logins, ai-memory, chrome profile
+    # mem_limit: 3g           # optional cap on a 4 GiB box
+volumes:
+  omni-home:

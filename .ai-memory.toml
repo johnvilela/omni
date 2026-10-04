@@ -1,0 +1,6 @@
+workspace = "default"
+project = "omni"
+project_strategy = "repo-root"
+
+[capture]
+ignore_paths = ["ai/**", "CLAUDE.md", "AGENTS.md", ".claude/**", ".agents/**"]
