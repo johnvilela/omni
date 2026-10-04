@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -29,13 +28,18 @@ func (s *Server) startUpdate(tag string) tgReply {
 	if !tagRe.MatchString(tag) {
 		return tgReply{Text: "⚠ bad version tag"}
 	}
+	if inContainer() {
+		// no buttons are sent in docker; a tap on an old offer must not queue
+		// a request nothing will ever claim
+		return tgReply{Text: "⚠ updates in docker: docker compose pull && docker compose up -d", StripKeyboard: true}
+	}
 	if err := os.MkdirAll(dataDir(), 0o700); err != nil {
 		return tgReply{Text: "⚠ could not queue update: " + err.Error()}
 	}
 	if err := os.WriteFile(filepath.Join(dataDir(), "update.request"), []byte(tag), 0o600); err != nil {
 		return tgReply{Text: "⚠ could not queue update: " + err.Error()}
 	}
-	if err := exec.Command("systemctl", "--user", "start", "--no-block", app+"-guardian.service").Run(); err != nil {
+	if err := kickGuardian(); err != nil {
 		log.Printf("update: start guardian: %v", err)
 	}
 	return tgReply{Text: "⏳ updating omni to " + tag + " — downloading, verifying, restarting; report follows", StripKeyboard: true}

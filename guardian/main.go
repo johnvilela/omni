@@ -1,9 +1,13 @@
-// Omni guardian: out-of-process watchdog run by a systemd user timer
-// (<app>-guardian.timer, oneshot). It checks the machine and the omni
-// server without any LLM and messages every approved telegram pairing on
-// state changes: one alert when a check goes red, one recovery notice when
-// it goes green again (state in <data>/guardian.json). Its only heal action
-// is restarting <app>-server when it stops responding.
+// Omni guardian: out-of-process watchdog. On a host a systemd user timer
+// (<app>-guardian.timer) runs it as a oneshot; in the docker image
+// (OMNI_CONTAINER=1, no systemd) the entrypoint keeps one copy alive and it
+// runs the same pass itself every OMNI_GUARDIAN_INTERVAL (unset = oneshot).
+// It checks the machine and the omni server without any LLM and messages
+// every approved telegram pairing on state changes: one alert when a check
+// goes red, one recovery notice when it goes green again (state in
+// <data>/guardian.json). Its only heal action is restarting <app>-server when
+// it stops responding (systemctl on a host; in docker a pkill that the
+// entrypoint's respawn loop answers).
 //
 // It is a separate binary because the failure it most needs to catch is the
 // server itself being dead — so it re-derives the telegram token (env or
@@ -77,6 +81,35 @@ func fmtBytes(b uint64) string {
 		return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30))
 	}
 	return fmt.Sprintf("%d MiB", b>>20)
+}
+
+// inContainer: the docker image sets OMNI_CONTAINER=1 — no systemd there
+// (twin of server/ops.go and cli/doctor.go).
+func inContainer() bool { return os.Getenv("OMNI_CONTAINER") == "1" }
+
+// loopInterval is the container cadence. OMNI_GUARDIAN_INTERVAL set means
+// "stay up and run a pass every so often" (the entrypoint has no timer);
+// unset means the systemd oneshot. 0/off idles instead of exiting so a
+// disabled guardian does not make the entrypoint respawn it every 2s; a bad
+// value falls back for the same reason instead of log.Fatal.
+func loopInterval() (every time.Duration, loop bool) {
+	raw := os.Getenv("OMNI_GUARDIAN_INTERVAL")
+	switch raw {
+	case "":
+		return 0, false
+	case "0", "off":
+		return 0, true
+	}
+	d, err := time.ParseDuration(raw)
+	switch {
+	case err != nil:
+		log.Printf("OMNI_GUARDIAN_INTERVAL=%q: not a duration, using 2m", raw)
+		return 2 * time.Minute, true
+	case d < 30*time.Second:
+		log.Printf("OMNI_GUARDIAN_INTERVAL=%s: below the 30s floor, using 30s", d)
+		return 30 * time.Second, true
+	}
+	return d, true
 }
 
 // ---- checks ----------------------------------------------------------------
@@ -313,14 +346,24 @@ func semverLess(a, b string) bool {
 	return false
 }
 
+// updateHint is how new binaries arrive on this install: the image in docker,
+// the installer on a host. Plugin entries carry their own command.
+func updateHint() string {
+	if inContainer() {
+		return "docker compose pull && docker compose up -d"
+	}
+	return "rerun the installer: curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install.sh | sh"
+}
+
 // checkUpdates compares each watched repo (config.yaml update_repos, GitHub
 // "owner/name") against what is installed: the binary named like the repo,
 // except omni itself, whose version is compiled in (the CLI has no --version).
 // A stale prod omni is returned as omniTag for the one-tap update offer
 // instead of joining the text alert (unless that tag is ignored); dev builds
-// keep the text alert, since release assets are prod-named. definitive is
-// false when any lookup failed — the caller then keeps the previous alert
-// state instead of faking a recovery.
+// keep the text alert, since release assets are prod-named, and so does
+// docker, where the image is the unit of update and nothing can be tapped
+// into place. definitive is false when any lookup failed — the caller then
+// keeps the previous alert state instead of faking a recovery.
 func checkUpdates(repos []string) (r checkResult, omniTag string, definitive bool) {
 	ignored := ""
 	if data, err := os.ReadFile(filepath.Join(dataDir(), "update.ignore")); err == nil {
@@ -344,7 +387,7 @@ func checkUpdates(repos []string) (r checkResult, omniTag string, definitive boo
 		if !semverLess(cur, latest) {
 			continue
 		}
-		if bin == "omni" && app == "omni" {
+		if bin == "omni" && app == "omni" && !inContainer() {
 			if latest != ignored {
 				omniTag = latest
 			}
@@ -363,7 +406,7 @@ func checkUpdates(repos []string) (r checkResult, omniTag string, definitive boo
 		stale = append(stale, entry)
 	}
 	if len(stale) > 0 {
-		return checkResult{name: "updates", detail: strings.Join(stale, ", ") + " — rerun the installer: curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install.sh | sh"}, omniTag, true
+		return checkResult{name: "updates", detail: strings.Join(stale, ", ") + " — " + updateHint()}, omniTag, true
 	}
 	return checkResult{name: "updates", ok: true, detail: "watched packages current"}, omniTag, true
 }
@@ -372,6 +415,7 @@ func checkUpdates(repos []string) (r checkResult, omniTag string, definitive boo
 // The server writes <data>/update.request when the owner taps ⬆ Update and
 // starts this unit; the guardian does the download/install/rollback out of
 // process, because the server cannot restart itself and survive to report.
+// Host only: in docker nothing writes update.request and main never claims it.
 
 func binDir() string {
 	home, err := os.UserHomeDir()
@@ -613,9 +657,9 @@ func probeServer() error {
 
 // waitServer polls until the server responds (and, when want != "", reports
 // exactly that version — proof the intended binary took). systemctl restart
-// returns before the port is bound (wiki/install.md), and startup can block
-// ~30s on the telegram resume when telegram is unreachable — hence the long
-// budget.
+// returns before the port is bound (and the docker respawn takes ~2s), and
+// startup can block ~30s on the telegram resume when telegram is unreachable
+// — hence the long budget.
 func waitServer(want string) bool {
 	for range probeTries {
 		time.Sleep(probeDelay)
@@ -627,20 +671,15 @@ func waitServer(want string) bool {
 }
 
 // checkServer probes /status and, when the server doesn't answer, restarts
-// the unit and re-probes — the only heal action the guardian takes. The
-// restart re-runs on every red run (idempotent); alerting stays once-per-
-// incident via the transition logic.
+// it and re-probes — the only heal action the guardian takes. The restart
+// re-runs on every red run (idempotent); alerting stays once-per-incident via
+// the transition logic.
 func checkServer() checkResult {
 	if probeServer() == nil {
 		return checkResult{name: "server", ok: true, detail: "responding"}
 	}
-	unit := app + "-server.service"
-	out, _ := exec.Command("systemctl", "--user", "is-active", unit).Output()
-	was := strings.TrimSpace(string(out))
-	if was == "active" {
-		was = "active but not responding"
-	}
-	if err := exec.Command("systemctl", "--user", "restart", unit).Run(); err != nil {
+	was, err := restartServer()
+	if err != nil {
 		return checkResult{name: "server", detail: fmt.Sprintf("down (%s), restart failed: %v", was, err)}
 	}
 	if waitServer("") {
@@ -648,6 +687,27 @@ func checkServer() checkResult {
 			event: fmt.Sprintf("server was %s — restarted by guardian", was)}
 	}
 	return checkResult{name: "server", detail: fmt.Sprintf("down (%s), restarted but still not responding", was)}
+}
+
+// restartServer bounces <app>-server and says what state it was in. On a
+// host that is systemctl. In docker the entrypoint's respawn loop is the
+// supervisor: a hung process just needs killing, and a dead one is already
+// being respawned — nothing to do but wait. pgrep/pkill -x match the comm
+// name (15 chars max): prod names fit, and the image is always prod.
+func restartServer() (was string, err error) {
+	if inContainer() {
+		if exec.Command("pgrep", "-x", app+"-server").Run() != nil {
+			return "not running", nil
+		}
+		return "active but not responding", exec.Command("pkill", "-x", app+"-server").Run()
+	}
+	unit := app + "-server.service"
+	out, _ := exec.Command("systemctl", "--user", "is-active", unit).Output()
+	was = strings.TrimSpace(string(out))
+	if was == "active" {
+		was = "active but not responding"
+	}
+	return was, exec.Command("systemctl", "--user", "restart", unit).Run()
 }
 
 // ---- telegram --------------------------------------------------------------
@@ -849,12 +909,12 @@ func transitions(prev map[string]string, results []checkResult, now time.Time) (
 // ---- main ------------------------------------------------------------------
 
 func main() {
-	log.SetFlags(0) // journald adds its own timestamps
+	log.SetFlags(0) // journald and docker logs add their own timestamps
 
-	cfg := readConfig()
-	token := resolveToken(cfg)
 	// read-only + own busy_timeout: the server runs this db with a single
-	// serialized connection and no WAL, so waiting is on us
+	// serialized connection and no WAL, so waiting is on us. sql.Open is
+	// lazy, so a handle opened before the server created omni.db starts
+	// working as soon as the file exists.
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir(), "omni.db")+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
 		log.Fatal(err)
@@ -862,7 +922,32 @@ func main() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 
-	if app == "omni" { // release assets are prod-named; dev never writes requests
+	every, loop := loopInterval()
+	if !loop {
+		runOnce(db) // host: one pass per systemd timer tick
+		return
+	}
+	if every == 0 {
+		log.Print("guardian disabled (OMNI_GUARDIAN_INTERVAL=off) — idling")
+		select {}
+	}
+	log.Printf("guardian loop: a pass every %s, first in %s", every, every)
+	for {
+		// first pass after one interval, like the timer's OnActiveSec: never
+		// probe a server that is still booting
+		time.Sleep(every)
+		runOnce(db)
+	}
+}
+
+// runOnce is one guardian pass — exactly what a systemd timer tick used to be.
+func runOnce(db *sql.DB) {
+	cfg := readConfig()
+	token := resolveToken(cfg)
+
+	// release assets are prod-named, dev never writes requests, and docker
+	// updates by pulling an image — the executor is host prod only
+	if app == "omni" && !inContainer() {
 		if tag, ok := claimUpdateRequest(); ok {
 			runUpdate(cfg, token, recipients(db), tag)
 			return // server was just restarted+probed; normal checks resume next tick

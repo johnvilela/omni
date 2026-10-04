@@ -17,6 +17,7 @@ func newUpdateTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	srv, store := newTestServer(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("OMNI_CONTAINER", "") // host assertions even when the suite runs in the image
 	if err := store.AddPairing("telegram", "42", "CODE"); err != nil {
 		t.Fatal(err)
 	}

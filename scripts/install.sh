@@ -284,11 +284,11 @@ if [ -n "$PKGS_MISSING" ]; then
   fi
 fi
 
-# playwright-cli (ships in the playwright npm package) drives the browser
+# playwright-cli (the @playwright/cli npm package) drives the browser
 if ! command -v playwright-cli >/dev/null; then
   if command -v npm >/dev/null; then
-    npm install -g playwright 2>/dev/null || sudo npm install -g playwright \
-      || warn "could not npm install -g playwright"
+    npm install -g @playwright/cli 2>/dev/null || sudo npm install -g @playwright/cli \
+      || warn "could not npm install -g @playwright/cli"
   else
     warn "npm missing — skipped playwright install"
   fi

@@ -193,6 +193,7 @@ func TestCheckUpdates(t *testing.T) {
 	}))
 	defer fake.Close()
 	t.Setenv("OMNI_GITHUB_API", fake.URL)
+	t.Setenv("OMNI_CONTAINER", "") // host assertions even when the suite runs in the image
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	bin := t.TempDir()
 	for name, v := range map[string]string{"memoria": "memoria 0.1.0", "current": "current 0.1.0", "broken": "broken 0.1.0"} {
@@ -286,6 +287,7 @@ func updateHarness(t *testing.T, statusVersion string, breakChecksums bool) (rep
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("OMNI_CONTAINER", "") // the executor is host-only; pin host mode
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
 	if err := os.MkdirAll(filepath.Join(home, ".local", "bin"), 0o755); err != nil {
 		t.Fatal(err)

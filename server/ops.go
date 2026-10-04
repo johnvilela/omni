@@ -11,9 +11,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
+	"time"
 )
+
+// inContainer: the docker image sets OMNI_CONTAINER=1 — no systemd there
+// (twin of guardian/main.go and cli/doctor.go).
+func inContainer() bool { return os.Getenv("OMNI_CONTAINER") == "1" }
+
+// exitFn and restartDelay are vars so tests swap the exit and skip the wait.
+var exitFn, restartDelay = os.Exit, 2 * time.Second
 
 // botTokenRe scrubs telegram bot tokens that transport errors embed in URLs —
 // log lines go to chat, the token must not (twin of cli/doctor.go).
@@ -60,10 +69,14 @@ func (s *Server) opsAction(act string) tgReply {
 		// run the guardian now; it sends the 🆕 offer if a release is newer
 		os.Remove(filepath.Join(dataDir(), "updates.stamp"))
 		os.Remove(filepath.Join(dataDir(), "update.ignore"))
-		if err := exec.Command("systemctl", "--user", "start", "--no-block", app+"-guardian.service").Run(); err != nil {
-			return tgReply{Text: "⚠ systemctl: " + err.Error()}
+		if err := kickGuardian(); err != nil {
+			return tgReply{Text: "⚠ guardian: " + err.Error()}
 		}
-		return tgReply{Text: "🔎 checking for updates (current " + version + ") — the 🆕 offer follows if there's a newer release; silence means up to date"}
+		follow := "the 🆕 offer follows if there's a newer release"
+		if inContainer() {
+			follow = "a ⚠ updates alert follows if there's a newer release (docker compose pull applies it)"
+		}
+		return tgReply{Text: "🔎 checking for updates (current " + version + ") — " + follow + "; silence means up to date"}
 	case "terminal":
 		s.termMu.Lock()
 		active := s.term != nil || s.termPending != nil
@@ -77,7 +90,30 @@ func (s *Server) opsAction(act string) tgReply {
 	return tgReply{Text: "⚠ unknown action"}
 }
 
+// kickGuardian runs one guardian pass now. On a host that is the oneshot
+// unit. In docker the binary is on PATH and runs oneshot exactly when
+// OMNI_GUARDIAN_INTERVAL is absent — strip it, or the child becomes a second
+// loop. Its output lands in docker logs; Wait reaps it.
+func kickGuardian() error {
+	if !inContainer() {
+		return exec.Command("systemctl", "--user", "start", "--no-block", app+"-guardian.service").Run()
+	}
+	cmd := exec.Command(app + "-guardian")
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, "OMNI_GUARDIAN_INTERVAL=")
+	})
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
+}
+
 func opsLogs() tgReply {
+	if inContainer() { // stdout is the log here, and only the host can read it
+		return tgReply{Text: "📜 " + app + "-server logs live in docker — on the host: docker compose logs --tail 30 omni"}
+	}
 	out, err := exec.Command("journalctl", "--user", "-u", app+"-server",
 		"-n", "30", "--no-pager", "-o", "cat", "-q").Output()
 	if err != nil {
@@ -114,8 +150,17 @@ func fmtBytes(b uint64) string {
 // opsRestart bounces the server through a transient systemd unit: it survives
 // this process's cgroup kill, and the 2s delay lets the poller issue the next
 // getUpdates so telegram confirms the tap — a synchronous restart would
-// replay the button after boot and loop forever.
+// replay the button after boot and loop forever. In docker the entrypoint's
+// respawn loop is the unit: exiting is the restart, same delay, same reason.
 func opsRestart() tgReply {
+	if inContainer() {
+		exit, delay := exitFn, restartDelay
+		go func() {
+			time.Sleep(delay)
+			exit(0)
+		}()
+		return tgReply{Text: "🔄 restarting " + app + "-server — back in a few seconds", StripKeyboard: true}
+	}
 	if err := exec.Command("systemd-run", "--user", "--on-active=2s", "--collect",
 		"systemctl", "--user", "restart", app+"-server.service").Run(); err != nil {
 		return tgReply{Text: "⚠ systemd-run: " + err.Error(), StripKeyboard: true}

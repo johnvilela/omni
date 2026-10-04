@@ -64,12 +64,27 @@ func renderSection(title string, cs []check) string {
 // installOneLiner reinstalls the latest release without needing a checkout.
 const installOneLiner = "curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install.sh | sh"
 
+// inContainer: the docker image sets OMNI_CONTAINER=1 — no systemd there
+// (twin of guardian/main.go and server/ops.go).
+func inContainer() bool { return os.Getenv("OMNI_CONTAINER") == "1" }
+
 // installScript is the rebuild/reinstall fix for whichever flavor this is.
 func installScript() string {
-	if strings.HasSuffix(app, "-dev") {
+	switch {
+	case inContainer():
+		return "docker compose pull && docker compose up -d" // the image is the install
+	case strings.HasSuffix(app, "-dev"):
 		return "scripts/dev.sh"
 	}
 	return installOneLiner
+}
+
+// serverRestartFix is how the owner bounces the server on this install.
+func serverRestartFix() string {
+	if inContainer() {
+		return "docker compose restart omni"
+	}
+	return "systemctl --user restart " + app + "-server"
 }
 
 func have(names ...string) bool {
@@ -122,7 +137,7 @@ func installChecks() []check {
 	if len(stackMissing) == 0 {
 		cs = append(cs, check{name: "agent stack: node, chromium, playwright-cli, ai-memory", ok: true})
 	} else {
-		cs = append(cs, check{name: "agent stack missing: " + strings.Join(stackMissing, ", "), fix: installOneLiner})
+		cs = append(cs, check{name: "agent stack missing: " + strings.Join(stackMissing, ", "), fix: installScript()})
 	}
 
 	var vendorMissing []string
@@ -140,19 +155,19 @@ func installChecks() []check {
 	if _, err := os.Stat(filepath.Join(dataDir(), "omni.db")); err == nil {
 		cs = append(cs, check{name: "database " + filepath.Join(dataDir(), "omni.db"), ok: true})
 	} else {
-		cs = append(cs, check{name: "database missing (the server creates it at first start)", fix: "systemctl --user start " + app + "-server"})
+		cs = append(cs, check{name: "database missing (the server creates it at first start)", fix: serverRestartFix()})
 	}
 
 	if _, err := os.Stat(filepath.Join(dataDir(), "agent", "chrome-profile")); err == nil {
 		cs = append(cs, check{name: "agent workspace with chrome profile", ok: true})
 	} else {
-		cs = append(cs, check{name: "agent workspace " + filepath.Join(dataDir(), "agent", "chrome-profile") + " missing", fix: installOneLiner})
+		cs = append(cs, check{name: "agent workspace " + filepath.Join(dataDir(), "agent", "chrome-profile") + " missing", fix: installScript()})
 	}
 
 	if _, err := os.Stat(filepath.Join(filepath.Dir(configPath()), "AGENTS.md")); err == nil {
 		cs = append(cs, check{name: "persona ~/.config/" + app + "/AGENTS.md", ok: true})
 	} else {
-		cs = append(cs, check{name: "persona AGENTS.md missing (the server seeds it at start)", fix: "systemctl --user restart " + app + "-server"})
+		cs = append(cs, check{name: "persona AGENTS.md missing (the server seeds it at start)", fix: serverRestartFix()})
 	}
 
 	return cs
@@ -222,23 +237,43 @@ func unitChecks(unit, enableFix, activeFix string) []check {
 	return []check{{name: unit + " enabled and active", ok: true}}
 }
 
+// processCheck is docker's unit check: the entrypoint respawns every process,
+// so "running" is the whole story.
+func processCheck(name string) check {
+	if exec.Command("pgrep", "-x", name).Run() != nil {
+		return check{name: name + " not running", fix: "docker compose logs --tail 50 omni"}
+	}
+	return check{name: name + " running", ok: true}
+}
+
 func serviceChecks() []check {
-	cs := unitChecks(app+"-server.service",
-		"systemctl --user enable --now "+app+"-server.service",
-		"systemctl --user restart "+app+"-server")
-	cs = append(cs, unitChecks(guardianTimer(),
-		"omni guardian --enabled=true",
-		"omni guardian --enabled=true")...)
+	var cs []check
+	if inContainer() {
+		for _, p := range []string{app + "-server", app + "-guardian", "ai-memory"} {
+			cs = append(cs, processCheck(p))
+		}
+	} else {
+		cs = unitChecks(app+"-server.service",
+			"systemctl --user enable --now "+app+"-server.service",
+			"systemctl --user restart "+app+"-server")
+		cs = append(cs, unitChecks(guardianTimer(),
+			"omni guardian --enabled=true",
+			"omni guardian --enabled=true")...)
+	}
 
 	alerts := guardianAlerts()
 	if len(alerts) == 0 {
 		cs = append(cs, check{name: "no active guardian alerts", ok: true})
 		return cs
 	}
+	logs := "journalctl --user -u " + app + "-guardian -n 20"
+	if inContainer() {
+		logs = "docker compose logs --tail 50 omni"
+	}
 	for _, name := range slices.Sorted(maps.Keys(alerts)) {
 		cs = append(cs, check{
 			name: "guardian alert: " + alertLine(name, alerts[name]),
-			fix:  "journalctl --user -u " + app + "-guardian -n 20",
+			fix:  logs,
 		})
 	}
 	return cs
@@ -272,7 +307,7 @@ func serverChecks(c *Client) []check {
 	st, err := c.Status()
 	if err != nil {
 		return []check{
-			{name: "server not responding at " + c.Base, fix: "systemctl --user restart " + app + "-server"},
+			{name: "server not responding at " + c.Base, fix: serverRestartFix()},
 			{name: "version, telegram, llm and pairing checks skipped (server down)", skip: true},
 		}
 	}

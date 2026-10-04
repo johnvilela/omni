@@ -39,3 +39,32 @@ jobs:
             echo "::error::tag $head_version already exists — bump to an unused version"
             exit 1
           fi
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: omni:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: smoke — boot, health, clean stop
+        run: |
+          # no vendor clis in CI: nothing to npm-install, no network beyond the status probe
+          docker run -d --name omni --init -e OMNI_VENDOR_INSTALL= omni:ci
+          for i in $(seq 1 60); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' omni)" = healthy ] && break
+            sleep 2
+          done
+          docker inspect -f '{{.State.Health.Status}}' omni | grep -x healthy
+          docker exec omni curl -fsS http://127.0.0.1:8787/status
+          docker exec omni omni doctor || true   # informational: no telegram or llm in CI
+          docker stop -t 30 omni
+          docker logs omni | tail -n 20
+          [ "$(docker inspect -f '{{.State.ExitCode}}' omni)" = 0 ]
