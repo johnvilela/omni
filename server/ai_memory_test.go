@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -339,5 +340,94 @@ func TestPlanSaveUsesAIMemoryPage(t *testing.T) {
 	}
 	if prompt := srv.plansPrompt(ctx); !strings.Contains(prompt, "ship-feature · active · #long") {
 		t.Fatalf("plans prompt = %q", prompt)
+	}
+}
+
+// ai-memory 3.2+ refuses unauthenticated HTTP even on loopback; every /mcp and
+// /hook request must carry the bearer token ai-memory writes next to its db.
+func TestAIMemorySendsBearerTokenFromDataDir(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	t.Setenv("OMNI_AI_MEMORY_TOKEN", "")
+	os.MkdirAll(filepath.Join(data, "ai-memory"), 0o700)
+	os.WriteFile(filepath.Join(data, "ai-memory", "auth-token"), []byte("file-token\n"), 0o600)
+
+	var mu sync.Mutex
+	auth := map[string]string{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth[r.URL.Path] = r.Header.Get("Authorization")
+		mu.Unlock()
+		if r.URL.Path == "/hook" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		var req map[string]any
+		json.NewDecoder(r.Body).Decode(&req)
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{}})
+	}))
+	defer ts.Close()
+
+	m := newAIMemoryClient(ts.URL)
+	m.recall(context.Background(), "hello world")
+	m.captureCall(context.Background(), "s1", "chat", "hello", "hi", nil)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if auth["/mcp"] != "Bearer file-token" || auth["/hook"] != "Bearer file-token" {
+		t.Fatalf("authorization headers = %#v", auth)
+	}
+}
+
+func TestAIMemoryTokenEnvOverridesFile(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	t.Setenv("OMNI_AI_MEMORY_TOKEN", "env-token")
+	os.MkdirAll(filepath.Join(data, "ai-memory"), 0o700)
+	os.WriteFile(filepath.Join(data, "ai-memory", "auth-token"), []byte("file-token"), 0o600)
+	if got := aiMemoryToken(); got != "env-token" {
+		t.Fatalf("token = %q", got)
+	}
+}
+
+func TestAIMemoryNoTokenSendsNoHeader(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("OMNI_AI_MEMORY_TOKEN", "")
+	var got string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer ts.Close()
+	newAIMemoryClient(ts.URL).capture(context.Background(), "notification", "x", "s", map[string]any{})
+	if got != "" {
+		t.Fatalf("unexpected Authorization %q", got)
+	}
+}
+
+// A rejected request must leave a trace in the log: the 401s from an upgraded
+// ai-memory went unnoticed for weeks because capture swallowed them.
+func TestAIMemoryLogsRejectedRequests(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("OMNI_AI_MEMORY_TOKEN", "")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	m := newAIMemoryClient(ts.URL)
+	m.capture(context.Background(), "notification", "x", "s", map[string]any{})
+	m.recall(context.Background(), "hello world")
+	m.capture(context.Background(), "notification", "x", "s", map[string]any{})
+
+	out := buf.String()
+	if !strings.Contains(out, "401") || !strings.Contains(out, "no token") {
+		t.Fatalf("log = %q", out)
+	}
+	if strings.Count(out, "401") != 1 {
+		t.Fatalf("expected one rate-limited warning, got: %q", out)
 	}
 }
