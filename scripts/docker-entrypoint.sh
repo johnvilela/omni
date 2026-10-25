@@ -78,6 +78,14 @@ if [ -f /opt/host/claude/claude.json ] && [ ! -f "$HOME/.claude.json" ]; then
   cp /opt/host/claude/claude.json "$HOME/.claude.json" && chmod 600 "$HOME/.claude.json"
 fi
 
+# a container that used to bind-mount the host's cli dirs keeps root-owned
+# empty mount points in the volume; the clis and ai-memory cannot write there
+for d in .claude .codex .gemini; do
+  if [ -d "$HOME/$d" ] && [ ! -w "$HOME/$d" ] && ! mountpoint -q "$HOME/$d"; then
+    warn "$HOME/$d is not writable (left over from a shared mount) — on the host: docker exec -u root $(hostname) chown -R $(id -u):$(id -g) $HOME/$d"
+  fi
+done
+
 # ai-memory's client wiring writes into ~/.claude and ~/.codex — the volume, or
 # the host's own dirs when they are bind-mounted. Those already carry the
 # host's entries for the same 127.0.0.1:49374 (the container's ai-memory here)
