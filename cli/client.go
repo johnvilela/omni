@@ -6,8 +6,27 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
+
+// apiTokenPath mirrors the server: <data dir>/api-token, written 0600 by
+// omni-server on first start. Both run as the same user, so the cli reads it.
+func apiTokenPath() string { return filepath.Join(dataDir(), "api-token") }
+
+// apiToken is OMNI_API_TOKEN, else the token file; "" when neither exists.
+func apiToken() string {
+	if t := strings.TrimSpace(os.Getenv("OMNI_API_TOKEN")); t != "" {
+		return t
+	}
+	raw, err := os.ReadFile(apiTokenPath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
 
 // Channel mirrors the server's channel status JSON.
 type Channel struct {
@@ -56,6 +75,9 @@ func (c *Client) do(method, path string, body, out any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if t := apiToken(); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -72,6 +94,9 @@ func (c *Client) do(method, path string, body, out any) error {
 		}
 		if e.Error == "key_required" {
 			return ErrKeyRequired
+		}
+		if e.Error == "unauthorized" {
+			return fmt.Errorf("server: unauthorized — the cli could not read %s (OMNI_API_TOKEN overrides); is this the server's user?", apiTokenPath())
 		}
 		if e.Error == "" {
 			e.Error = resp.Status

@@ -12,4 +12,4 @@ tags: [docker, container, systemd, workflow]
 
 Test the container branch under `t.Setenv("OMNI_CONTAINER", "1")` with PATH shims for `pgrep`/`pkill` (never let a test reach the real `pkill`), and pin `t.Setenv("OMNI_CONTAINER", "")` in host-mode harnesses so the suite also passes inside the image.
 
-In docker "restart X" means "kill X": `scripts/docker-entrypoint.sh` respawns every process on any exit code. Vendor clis may be host binaries bind-mounted read-only at `/opt/host/<name>/<name>` — never assume they are writable or npm-managed. `server/docker_contract_test.go` greps `Dockerfile` + the entrypoint for the contract.
+In docker "restart X" means "kill X": `scripts/docker-entrypoint.sh` respawns every process on any exit code. Vendor clis may be host binaries bind-mounted read-only at `/opt/host/<name>/<name>` — never assume they are writable or npm-managed. Their `~/.claude`/`~/.codex`/`~/.gemini` live in the volume by default (`OMNI_SHARE_HOST_CLIS=1` bind-mounts the host's); never add a default mount of host credential or settings dirs. `server/docker_contract_test.go` greps `Dockerfile` + the entrypoint for the contract.

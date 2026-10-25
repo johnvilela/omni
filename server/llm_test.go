@@ -35,7 +35,7 @@ func newLLMTestServer(t *testing.T) (*Server, *Store) {
 		}
 	})
 	mux.HandleFunc("/v1beta/models", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("key") == "GOOD" {
+		if r.Header.Get("x-goog-api-key") == "GOOD" {
 			fmt.Fprint(w, `{"models":[{"name":"models/gemini-test","supportedGenerationMethods":["generateContent"]},{"name":"models/embedding-test","supportedGenerationMethods":["embedContent"]}]}`)
 			return
 		}
@@ -57,7 +57,7 @@ func newLLMTestServer(t *testing.T) (*Server, *Store) {
 		fmt.Fprint(w, `{"content":[{"type":"text","text":"pong"}]}`)
 	})
 	mux.HandleFunc("/v1beta/models/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("key") != "GOOD" {
+		if r.Header.Get("x-goog-api-key") != "GOOD" {
 			w.WriteHeader(401)
 			return
 		}
@@ -333,6 +333,7 @@ func TestLLMStatusModelEffort(t *testing.T) {
 func getModels(t *testing.T, h http.Handler, provider string) (int, []string) {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/llm/"+provider+"/models", nil)
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	var ms []string

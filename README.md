@@ -57,6 +57,8 @@ Knobs, as environment variables in front of `bash`:
 | `OMNI_VERSION=v0.25.0` | install that release instead of the latest |
 | `OMNI_SKIP_DEPS=1` | skip browser-agent dependencies (node, Chromium, Playwright); ai-memory remains enabled |
 
+The server listens on `127.0.0.1:8787` and every API route but `/status` needs a bearer token it generates on first start at `~/.local/share/omni/api-token` (mode 0600). The `omni` cli reads that file when it runs as the same user; `OMNI_API_TOKEN` overrides it.
+
 To remove omni again (it asks before deleting your config and database):
 
 ```sh
@@ -87,7 +89,7 @@ Binaries live in the image, state lives in the `omni-home` volume at `/home/omni
 | | |
 |---|---|
 | cli | `docker exec -it omni omni status` (or the `omni` wrapper); `plugins`, `doctor` and `guardian` must run this way — they act on the machine they run on |
-| login a cli installed inside | `docker exec -it omni claude login` · `docker exec -it omni codex login --device-auth` · `docker exec -it omni gemini` |
+| login a cli (once, kept in the volume) | `docker exec -it omni claude login` · `docker exec -it omni codex login --device-auth` · `docker exec -it omni gemini` |
 | plugins | `docker exec -it omni omni plugins install owner/repo`, or `OMNI_PLUGINS=owner/repo,…` in `.env` (installed/upgraded at every start) |
 | logs | `docker logs -f omni` |
 | one-off command | `docker compose run --rm omni doctor` |
@@ -95,7 +97,7 @@ Binaries live in the image, state lives in the `omni-home` volume at `/home/omni
 | upgrade | `docker compose pull && docker compose up -d` — the guardian announces new releases on Telegram; [Watchtower](https://containrrr.dev/watchtower/) can pull automatically (it may recreate the container mid-agent-turn) |
 | backup / move | `~/omni-docker/omni-docker-backup.sh backup` → one `omni-backup-<date>.tgz` (the whole home volume + `.env`, container stopped meanwhile). On another PC: run the installer there, then `omni-docker-backup.sh restore FILE` — token, keys, plugins and TZ travel; uid, port and the vendor-cli list stay as that PC's installer set them |
 
-Notes: the API port is published on `127.0.0.1` only (it has no auth) — `OMNI_PORT` moves it when a native `omni-server` already owns 8787; `TZ` in `.env` is what crons run in; the container cannot update itself, so the ⬆ Update button becomes a text hint; Chromium runs headless with `--no-sandbox` inside (add `shm_size: 1g` if heavy pages crash); on a 4 GiB box uncomment `mem_limit`; a uid other than 1000 gets a bind-mounted home under `~/omni-docker/home` instead of the named volume; shared `~/.claude`/`~/.codex` mean container agent sessions also show up in `claude --resume` / `codex resume` on the PC. Build locally with `docker build -t omni .` (`--build-arg AI_MEMORY_VERSION=vX.Y.Z` pins ai-memory).
+Notes: the API port is published on `127.0.0.1` only and every route but `/status` needs the bearer token the server writes to `/home/omni/.local/share/omni/api-token` (the `omni` cli inside the container reads it; `OMNI_API_TOKEN` overrides) — `OMNI_PORT` moves it when a native `omni-server` already owns 8787; `TZ` in `.env` is what crons run in; the container cannot update itself, so the ⬆ Update button becomes a text hint; Chromium runs headless with `--no-sandbox` inside (add `shm_size: 1g` if heavy pages crash); on a 4 GiB box uncomment `mem_limit`; a uid other than 1000 gets a bind-mounted home under `~/omni-docker/home` instead of the named volume; the installer reuses this PC's cli binaries (read-only) but not its `~/.claude`/`~/.codex`/`~/.gemini` — an agent in the container must not be able to read or rewrite your own logins and settings — and `OMNI_SHARE_HOST_CLIS=1 bash install-docker.sh` opts back into sharing them (sessions then also show up in `claude --resume` on the PC). Build locally with `docker build -t omni .` (`--build-arg AI_MEMORY_VERSION=vX.Y.Z` pins ai-memory).
 
 ## Setup
 
@@ -126,6 +128,8 @@ Notes: the API port is published on `127.0.0.1` only (it has no auth) — `OMNI_
    omni doctor
    ```
 
+Agent sessions run inside the vendor cli's own sandbox by default: Claude gets `--permission-mode acceptEdits` with no one to answer prompts and an allowlist of tools (files, search, web, the browser through `playwright-cli`/`chromium`, omni's MCP servers); Codex gets `--sandbox workspace-write` with network on. Arbitrary shell is denied. If you accept that a page or document an agent reads could steer it with the full reach of your account, set `agent_permissions: full` in `~/.config/omni/config.yaml` to restore `--dangerously-skip-permissions` / `--dangerously-bypass-approvals-and-sandbox`. Either way, children never inherit the bot token, the api token or another provider's keys.
+
 ## Usage
 
 | Command | What it does |
@@ -140,7 +144,7 @@ Notes: the API port is published on `127.0.0.1` only (it has no auth) — `OMNI_
 | `omni guardian` | watchdog status, check interval and on/off |
 | `omni help` | show the help screen |
 
-In Telegram, plain messages get chat answers; slash commands drive the hub: `/new`, `/clear`, `/agent`, `/task`, `/tasks`, `/sessions`, `/usage`, `/context`, `/crons`, `/pin`, `/terminal`, `/interrupt`, `/ops`, `/plan`, `/memory`, `/memory_retention`.
+In Telegram, plain messages get chat answers; slash commands drive the hub: `/new`, `/clear`, `/agent`, `/task`, `/tasks`, `/sessions`, `/usage`, `/context`, `/crons`, `/pin`, `/terminal` (unprivileged shell as the service user; no sudo), `/interrupt`, `/ops`, `/plan`, `/memory`, `/memory_retention`.
 
 Every AI call Omni makes is captured locally by ai-memory with sanitization and size limits. Raw-observation pruning is set to 30 days by default; ai-memory prunes only sessions it has consolidated, so this is not a guaranteed deletion deadline. Durable `/memory` facts and plans remain pinned. View or change the setting from Telegram with `/memory_retention` or `/memory_retention 45d`.
 
@@ -156,7 +160,7 @@ omni plugins install owner/repo
 
 ## Development
 
-Building from source needs [Go](https://go.dev) 1.27+. `scripts/dev.sh` needs [Docker](https://docs.docker.com/engine/install/) with the compose plugin and [gum](https://github.com/charmbracelet/gum): it builds the working tree into the `omni:dev` image and runs it as the `omni-dev` container (`docker-compose.dev.yml`: port `127.0.0.1:8788`, volume `omni-dev-home`, settings in a gitignored `.env.dev`), sharing your `claude`/`codex`/`gemini` logins like the docker installer, and drops an `omni-dev` wrapper in `~/.local/bin`. It coexists with a production install. `scripts/build.sh` is the single build entrypoint (`PROD=1`, `APP`, `ADDR` knobs; `build.sh all` produces the release matrix). `scripts/uninstall.sh` removes everything (`--dev`: only the dev container), prompting before touching data.
+Building from source needs [Go](https://go.dev) 1.27+. `scripts/dev.sh` needs [Docker](https://docs.docker.com/engine/install/) with the compose plugin and [gum](https://github.com/charmbracelet/gum): it builds the working tree into the `omni:dev` image and runs it as the `omni-dev` container (`docker-compose.dev.yml`: port `127.0.0.1:8788`, volume `omni-dev-home`, settings in a gitignored `.env.dev`), reusing your `claude`/`codex` binaries like the docker installer (logins stay in the volume), and drops an `omni-dev` wrapper in `~/.local/bin`. It also fixes one `OMNI_API_TOKEN` in `.env.dev` and mirrors it to `~/.local/share/omni-dev/api-token`, so a host-built cli (`APP=omni-dev ADDR=:8788 scripts/build.sh`, then `bin/omni-dev status`) talks to the container's api directly; `doctor`, `plugins` and `guardian` still act on the machine they run on and need `docker exec`. It coexists with a production install. `scripts/build.sh` is the single build entrypoint (`PROD=1`, `APP`, `ADDR` knobs; `build.sh all` produces the release matrix). `scripts/uninstall.sh` removes everything (`--dev`: only the dev container), prompting before touching data.
 
 ## License
 

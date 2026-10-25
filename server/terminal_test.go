@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -76,95 +74,36 @@ func TestFishPerCommand(t *testing.T) {
 	}
 }
 
-func TestAutoSudo(t *testing.T) {
-	if got := autoSudo("sudo systemctl restart x"); got != "sudo -A systemctl restart x" {
-		t.Fatalf("leading sudo: %q", got)
-	}
-	if got := autoSudo("ls -la"); got != "ls -la" {
-		t.Fatalf("no sudo should pass through: %q", got)
-	}
-}
-
-// fakeSudo installs a `sudo` on PATH (real bash kept reachable) that accepts
-// only the password "pw": it reads the first stdin line and, on a match, execs
-// the rest of its args; otherwise exits 1.
-func fakeSudo(t *testing.T) {
-	t.Helper()
-	bin := t.TempDir()
-	script := `#!/bin/sh
-# skip sudo's own flags (-k -S -p '' ...) to the command
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -p) shift 2 ;;
-    -*) shift ;;
-    *) break ;;
-  esac
-done
-read line
-[ "$line" = "pw" ] || exit 1
-exec "$@"
-`
-	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-}
-
-// TestApplyPasswordRetry: a wrong password keeps /terminal armed for another
-// try (up to maxSudoTries), then gives up; the right one opens the shell.
-func TestApplyPasswordRetry(t *testing.T) {
-	fakeSudo(t) // accepts "pw"
-	s := &Server{}
-	p := &termPending{openShell: true}
-
-	for i := 1; i < maxSudoTries; i++ {
-		r := s.applyPassword(p, "wrong")
-		if s.termPending == nil {
-			t.Fatalf("attempt %d dropped out of terminal mode", i)
-		}
-		if !strings.Contains(r.Text, "try again") || !r.DeleteInbound {
-			t.Fatalf("attempt %d: %q", i, r.Text)
-		}
-	}
-	r := s.applyPassword(p, "wrong") // exhausts tries
-	if s.termPending != nil || !strings.Contains(r.Text, "too many") {
-		t.Fatalf("should give up after %d tries: pending=%v %q", maxSudoTries, s.termPending, r.Text)
-	}
-
-	// the right password opens the shell
-	p2 := &termPending{openShell: true}
-	if r := s.applyPassword(p2, "pw"); s.term == nil || s.termPending != nil || !strings.Contains(r.Text, "terminal mode") {
-		t.Fatalf("correct password should open the shell: %q", r.Text)
-	}
-	s.endTerminal(s.term)
-}
-
-func TestValidateSudo(t *testing.T) {
-	fakeSudo(t)
-	if !validateSudo(context.Background(), "pw") {
-		t.Fatal("right password rejected")
-	}
-	if validateSudo(context.Background(), "nope") {
-		t.Fatal("wrong password accepted")
-	}
-}
-
-// TestRunOneShot: no-sudo runs as-is with no password; a leading sudo is
-// rewritten so the piped password authenticates the fake sudo. Every reply
-// carries the 📁 prompt line, and the real exit code comes from the sentinel.
+// TestRunOneShot: a plain command runs in the login shell with the 📁 prompt
+// line; the exit code comes from the sentinel; the child never sees the
+// server's secrets.
 func TestRunOneShot(t *testing.T) {
-	fakeSudo(t)
-	// no-sudo runs in the real login shell: clean output + prompt line
-	if out, err := runOneShot(context.Background(), "", "echo plain", defaultShell(), io.Discard); err != nil || !strings.Contains(out, "plain") || !strings.Contains(out, "📁") {
+	if out, err := runOneShot(context.Background(), "echo plain", defaultShell(), io.Discard); err != nil || !strings.Contains(out, "plain") || !strings.Contains(out, "📁") {
 		t.Fatalf("plain: %q %v", out, err)
 	}
-	// leading-sudo rewrite: pin bash so the fake sudo resolves via PATH (fish
-	// rebuilds PATH from its config and would bypass it)
-	if out, err := runOneShot(context.Background(), "pw", "sudo echo rooted", "/bin/bash", io.Discard); err != nil || !strings.Contains(out, "rooted") {
-		t.Fatalf("sudo: %q %v", out, err)
+	if out, _ := runOneShot(context.Background(), "false", "/bin/bash", io.Discard); !strings.Contains(out, "[exit 1]") {
+		t.Fatalf("exit code not surfaced: %q", out)
 	}
-	if out, _ := runOneShot(context.Background(), "wrong", "sudo echo x", "/bin/bash", io.Discard); !strings.Contains(out, "[exit 1]") {
-		t.Fatalf("wrong sudo password should surface a non-zero exit: %q", out)
+	t.Setenv("TELEGRAM_BOT_TOKEN", "AUDIT_BOT_SECRET")
+	if out, _ := runOneShot(context.Background(), "echo [$TELEGRAM_BOT_TOKEN] $OMNI_ASKPASS_PW $SUDO_ASKPASS", "/bin/bash", io.Discard); strings.Contains(out, "AUDIT_BOT_SECRET") || strings.Contains(out, "ASKPASS") {
+		t.Fatalf("child inherited a secret: %q", out)
+	}
+}
+
+// TestTerminalRefusesSudo: no password prompt anywhere — /terminal opens an
+// unprivileged shell straight away and sudo is refused in both entry points.
+func TestTerminalRefusesSudo(t *testing.T) {
+	s := &Server{}
+	if r, ok := s.handleTerminal(context.Background(), "$ sudo ls"); !ok || !strings.Contains(r.Text, "sudo is disabled") {
+		t.Fatalf("one-shot sudo = %v %q", ok, r.Text)
+	}
+	r, ok := s.handleTerminal(context.Background(), "/terminal")
+	if !ok || strings.Contains(r.Text, "password") || s.term == nil {
+		t.Fatalf("/terminal = %v %q term=%v", ok, r.Text, s.term)
+	}
+	defer s.endTerminal(s.term)
+	if r, _ := s.handleTerminal(context.Background(), "sudo -i"); !strings.Contains(r.Text, "sudo is disabled") {
+		t.Fatalf("in-session sudo = %q", r.Text)
 	}
 }
 
@@ -220,7 +159,7 @@ func TestInterruptOneShot(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runOneShot(ctx, "", "sleep 30", "/bin/bash", io.Discard)
+		runOneShot(ctx, "sleep 30", "/bin/bash", io.Discard)
 		close(done)
 	}()
 	time.Sleep(300 * time.Millisecond)
@@ -272,10 +211,9 @@ func TestTerminalIdleTTL(t *testing.T) {
 	old := termIdleTTL
 	termIdleTTL = 50 * time.Millisecond
 	t.Cleanup(func() { termIdleTTL = old })
-	fakeSudo(t)
 	srv, _, calls := newPinServer(t)
 
-	if r := srv.applyPassword(&termPending{openShell: true}, "pw"); !strings.Contains(r.Text, "terminal mode") {
+	if r := srv.openTerminal(); !strings.Contains(r.Text, "terminal mode") {
 		t.Fatalf("shell did not open: %q", r.Text)
 	}
 	sent := nextCall(t, calls, "sendMessage")

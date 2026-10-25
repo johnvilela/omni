@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -44,7 +45,9 @@ Reply in the language the owner wrote in (Portuguese gets Portuguese).
 
 ## Autonomy
 
-You run with full permissions on the owner's own machine. A turn is killed
+You run on the owner's own machine inside the cli's sandbox (restricted mode:
+writes stay in this workspace, shell is limited to the browser tools; the
+owner can lift that with agent_permissions: full). A turn is killed
 after ~15 minutes — for long jobs, do a useful chunk and report progress so
 the owner can say "continue". If a task is ambiguous or destructive beyond
 what was asked, ask a short question before acting instead of guessing.
@@ -289,15 +292,7 @@ func parseCodexEvents(out string) (threadID string, u callUsage) {
 // runClaudeAgent runs one un-bare claude turn in the workspace; the json
 // output carries the reply, usage and the session id to resume next turn.
 func runClaudeAgent(ctx context.Context, vendorID, text string) (reply, newVendorID string, u callUsage, err error) {
-	args := []string{"-p", text, "--output-format", "json", "--dangerously-skip-permissions"}
-	// plugin MCP servers (cli/plugins.go writes the file) merge with the
-	// user's own config — unlike chat mode's --strict-mcp-config
-	if mcp := filepath.Join(agentDir(), ".mcp.json"); fileExists(mcp) {
-		args = append(args, "--mcp-config", mcp)
-	}
-	if vendorID != "" {
-		args = append(args, "--resume", vendorID)
-	}
+	args := claudeAgentArgs(text, vendorID, agentFullPermissions())
 	out, err := runCLI(ctx, agentDir(), agentTimeout, resolveVendorBin("claude"), args...)
 	if err != nil {
 		return "", "", callUsage{}, err
@@ -320,14 +315,7 @@ func runCodexAgent(ctx context.Context, vendorID, text string) (reply, newVendor
 	tmp.Close()
 	defer os.Remove(tmp.Name())
 
-	args := []string{"exec"}
-	if vendorID != "" {
-		args = append(args, "resume", vendorID)
-	}
-	args = append(args, "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
-		"--json", "-o", tmp.Name())
-	args = append(args, codexMCPArgs()...) // codex has no project mcp file
-	args = append(args, text)
+	args := codexAgentArgs(text, vendorID, tmp.Name(), agentFullPermissions())
 	out, err := runCLI(ctx, agentDir(), agentTimeout, resolveVendorBin("codex"), args...)
 	if err != nil {
 		return "", "", callUsage{}, err
@@ -338,6 +326,78 @@ func runCodexAgent(ctx context.Context, vendorID, text string) (reply, newVendor
 		return "", "", callUsage{}, err
 	}
 	return string(raw), newVendorID, u, nil
+}
+
+// claudeAgentArgs builds the claude agent invocation. Restricted (default):
+// acceptEdits inside the workspace, nobody answers permission prompts (so
+// anything else is denied), and an allowlist of tools — files, search, web,
+// the browser via playwright-cli/chromium, and the MCP servers omni wired
+// (ai-memory, plugins). Full: --dangerously-skip-permissions, the owner's
+// explicit choice.
+func claudeAgentArgs(text, vendorID string, full bool) []string {
+	args := []string{"-p", text, "--output-format", "json"}
+	if full {
+		args = append(args, "--dangerously-skip-permissions")
+	} else {
+		tools := []string{"Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch",
+			"Bash(playwright-cli *)", "Bash(chromium *)", "Bash(curl -s localhost:9222/json/version)",
+			"mcp__ai-memory"}
+		for _, name := range mcpServerNames(filepath.Join(agentDir(), ".mcp.json")) {
+			tools = append(tools, "mcp__"+name)
+		}
+		args = append(args, "--permission-mode", "acceptEdits", "--permission-prompts", "none",
+			"--allowedTools", strings.Join(tools, ","))
+	}
+	// plugin MCP servers (cli/plugins.go writes the file) merge with the
+	// user's own config — unlike chat mode's --strict-mcp-config
+	if mcp := filepath.Join(agentDir(), ".mcp.json"); fileExists(mcp) {
+		args = append(args, "--mcp-config", mcp)
+	}
+	if vendorID != "" {
+		args = append(args, "--resume", vendorID)
+	}
+	return args
+}
+
+// codexAgentArgs builds the codex agent invocation. Restricted (default):
+// the workspace-write sandbox with network on (the browser needs it) and no
+// approval prompts, so anything the sandbox refuses fails instead of
+// escalating. Full: --dangerously-bypass-approvals-and-sandbox.
+func codexAgentArgs(text, vendorID, outFile string, full bool) []string {
+	args := []string{"exec"}
+	if vendorID != "" {
+		args = append(args, "resume", vendorID)
+	}
+	args = append(args, "--skip-git-repo-check")
+	if full {
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	} else {
+		args = append(args, "-s", "workspace-write", "-a", "never",
+			"-c", "sandbox_workspace_write.network_access=true")
+	}
+	args = append(args, "--json", "-o", outFile)
+	args = append(args, codexMCPArgs()...) // codex has no project mcp file
+	return append(args, text)
+}
+
+// mcpServerNames lists the servers in a claude .mcp.json ("" when unreadable).
+func mcpServerNames(path string) []string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var top struct {
+		Servers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(raw, &top) != nil {
+		return nil
+	}
+	names := make([]string, 0, len(top.Servers))
+	for n := range top.Servers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 var (

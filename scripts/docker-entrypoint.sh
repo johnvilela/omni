@@ -33,6 +33,8 @@ AI_CONFIG="$CONFIG/ai-memory/config.toml"
 AI_ENV="$OMNI_CONFIG/ai-memory.env"
 PORT=${OMNI_ADDR:-:8787}; PORT=${PORT##*:}
 API="http://127.0.0.1:$PORT"
+# every route but /status needs the bearer token omni-server writes on start
+api() { curl -fsS -H "Authorization: Bearer $(cat "$DATA/omni/api-token" 2>/dev/null)" "$@"; }
 # unset would mean "oneshot" to the guardian, which the respawn loop would then
 # restart every 2s — default the loop cadence instead
 : "${OMNI_GUARDIAN_INTERVAL:=2m}"; export OMNI_GUARDIAN_INTERVAL
@@ -75,6 +77,14 @@ done
 if [ -f /opt/host/claude/claude.json ] && [ ! -f "$HOME/.claude.json" ]; then
   cp /opt/host/claude/claude.json "$HOME/.claude.json" && chmod 600 "$HOME/.claude.json"
 fi
+
+# a container that used to bind-mount the host's cli dirs keeps root-owned
+# empty mount points in the volume; the clis and ai-memory cannot write there
+for d in .claude .codex .gemini; do
+  if [ -d "$HOME/$d" ] && [ ! -w "$HOME/$d" ] && ! mountpoint -q "$HOME/$d"; then
+    warn "$HOME/$d is not writable (left over from a shared mount) — on the host: docker exec -u root $(hostname) chown -R $(id -u):$(id -g) $HOME/$d"
+  fi
+done
 
 # ai-memory's client wiring writes into ~/.claude and ~/.codex — the volume, or
 # the host's own dirs when they are bind-mounted. Those already carry the
@@ -154,8 +164,8 @@ post_start() {
   wait_status 60 || warn "omni-server did not answer /status within 60s — see docker logs"
   info "omni-server $(curl -fsS "$API/status" 2>/dev/null || echo 'not responding')"
   if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] \
-     && ! curl -fsS "$API/channels/telegram" 2>/dev/null | grep -q '"connected":true'; then
-    curl -fsS -X POST "$API/channels/telegram/connect" -H 'Content-Type: application/json' -d '{}' >/dev/null \
+     && ! api "$API/channels/telegram" 2>/dev/null | grep -q '"connected":true'; then
+    api -X POST "$API/channels/telegram/connect" -H 'Content-Type: application/json' -d '{}' >/dev/null \
       && info "telegram connected from TELEGRAM_BOT_TOKEN" \
       || warn "telegram connect failed — check TELEGRAM_BOT_TOKEN, then: omni channels connect -c telegram"
   fi
