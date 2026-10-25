@@ -6,9 +6,14 @@
 #   curl -fsSL https://raw.githubusercontent.com/johnvilela/omni/master/scripts/install-docker.sh | bash
 #
 # The claude/codex/gemini clis already on this PC are reused: a standalone
-# binary is bind-mounted read-only into the container, your ~/.claude, ~/.codex
-# and ~/.gemini logins are shared, and only a cli this PC lacks (or has as a
-# node script) is installed inside the container's volume.
+# binary is bind-mounted read-only into the container, and only a cli this PC
+# lacks (or has as a node script) is installed inside the container's volume.
+# Logins are NOT shared: the container keeps its own ~/.claude, ~/.codex and
+# ~/.gemini in the volume (log in once with docker exec), so an agent inside
+# the container can never read or rewrite the credentials and settings of the
+# clis on this PC. OMNI_SHARE_HOST_CLIS=1 bind-mounts them anyway (read-write:
+# the clis need to write session state there) — an explicit trade of that
+# isolation for shared sessions.
 # Safe to re-run: it refreshes docker-compose.yml and the override, pulls the
 # newest image and restarts — a re-run is an upgrade (also after upgrading a
 # cli on this PC, so the mount follows the new version). .env is never
@@ -16,7 +21,8 @@
 #   OMNI_DIR            where the compose files live (default: ~/omni-docker)
 #   OMNI_VERSION        image tag to run (default: latest)
 #   TELEGRAM_BOT_TOKEN  bot token (default: prompt, or leave it for later)
-#   OMNI_NO_HOST_CLIS   set to 1 to install every cli inside the container
+#   OMNI_NO_HOST_CLIS   set to 1 to install every cli inside the container (no host binaries)
+#   OMNI_SHARE_HOST_CLIS set to 1 to bind-mount ~/.claude ~/.codex ~/.gemini (logins, settings)
 #   OMNI_RAW, OMNI_BIN  dev: where to fetch the compose files from / put the wrapper
 set -euo pipefail
 
@@ -110,9 +116,9 @@ detect_cli() {
   fi
 }
 for c in claude codex gemini; do detect_cli "$c"; done
-if [ "${OMNI_NO_HOST_CLIS:-}" = 1 ]; then
-  info "OMNI_NO_HOST_CLIS=1: every cli is installed inside the container"
-else
+[ "${OMNI_NO_HOST_CLIS:-}" = 1 ] && info "OMNI_NO_HOST_CLIS=1: every cli is installed inside the container"
+if [ "${OMNI_SHARE_HOST_CLIS:-}" = 1 ]; then
+  warn "OMNI_SHARE_HOST_CLIS=1: an agent in the container can read and rewrite this PC's cli logins and settings"
   for d in .claude .codex .gemini; do
     if [ -d "$HOME/$d" ]; then
       MOUNTS+=("$HOME/$d:/home/omni/$d"); info "sharing ~/$d (login, settings)"
@@ -121,6 +127,9 @@ else
   if [ -f "$HOME/.claude.json" ]; then
     MOUNTS+=("$HOME/.claude.json:/opt/host/claude/claude.json:ro")
   fi
+else
+  info "cli logins stay inside the container (OMNI_SHARE_HOST_CLIS=1 shares this PC's)"
+  LOGIN_HINT=1
 fi
 setenv OMNI_VENDOR_INSTALL "$(IFS=,; echo "${INSTALL[*]-}")"
 
@@ -192,6 +201,12 @@ if [ "$st" = healthy ]; then
   info "omni is healthy"
 else
   warn "omni is '$st' after two minutes — check: docker logs omni"
+fi
+if [ "${LOGIN_HINT:-}" = 1 ]; then
+  info "agent mode needs a cli login inside the container (once; it lives in the volume):"
+  info "  docker exec -it omni claude login"
+  info "  docker exec -it omni codex login --device-auth"
+  info "  docker exec -it omni gemini"
 fi
 
 # --- host cli -------------------------------------------------------------------

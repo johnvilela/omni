@@ -89,7 +89,7 @@ Binaries live in the image, state lives in the `omni-home` volume at `/home/omni
 | | |
 |---|---|
 | cli | `docker exec -it omni omni status` (or the `omni` wrapper); `plugins`, `doctor` and `guardian` must run this way — they act on the machine they run on |
-| login a cli installed inside | `docker exec -it omni claude login` · `docker exec -it omni codex login --device-auth` · `docker exec -it omni gemini` |
+| login a cli (once, kept in the volume) | `docker exec -it omni claude login` · `docker exec -it omni codex login --device-auth` · `docker exec -it omni gemini` |
 | plugins | `docker exec -it omni omni plugins install owner/repo`, or `OMNI_PLUGINS=owner/repo,…` in `.env` (installed/upgraded at every start) |
 | logs | `docker logs -f omni` |
 | one-off command | `docker compose run --rm omni doctor` |
@@ -97,7 +97,7 @@ Binaries live in the image, state lives in the `omni-home` volume at `/home/omni
 | upgrade | `docker compose pull && docker compose up -d` — the guardian announces new releases on Telegram; [Watchtower](https://containrrr.dev/watchtower/) can pull automatically (it may recreate the container mid-agent-turn) |
 | backup / move | `~/omni-docker/omni-docker-backup.sh backup` → one `omni-backup-<date>.tgz` (the whole home volume + `.env`, container stopped meanwhile). On another PC: run the installer there, then `omni-docker-backup.sh restore FILE` — token, keys, plugins and TZ travel; uid, port and the vendor-cli list stay as that PC's installer set them |
 
-Notes: the API port is published on `127.0.0.1` only and every route but `/status` needs the bearer token the server writes to `/home/omni/.local/share/omni/api-token` (the `omni` cli inside the container reads it; `OMNI_API_TOKEN` overrides) — `OMNI_PORT` moves it when a native `omni-server` already owns 8787; `TZ` in `.env` is what crons run in; the container cannot update itself, so the ⬆ Update button becomes a text hint; Chromium runs headless with `--no-sandbox` inside (add `shm_size: 1g` if heavy pages crash); on a 4 GiB box uncomment `mem_limit`; a uid other than 1000 gets a bind-mounted home under `~/omni-docker/home` instead of the named volume; shared `~/.claude`/`~/.codex` mean container agent sessions also show up in `claude --resume` / `codex resume` on the PC. Build locally with `docker build -t omni .` (`--build-arg AI_MEMORY_VERSION=vX.Y.Z` pins ai-memory).
+Notes: the API port is published on `127.0.0.1` only and every route but `/status` needs the bearer token the server writes to `/home/omni/.local/share/omni/api-token` (the `omni` cli inside the container reads it; `OMNI_API_TOKEN` overrides) — `OMNI_PORT` moves it when a native `omni-server` already owns 8787; `TZ` in `.env` is what crons run in; the container cannot update itself, so the ⬆ Update button becomes a text hint; Chromium runs headless with `--no-sandbox` inside (add `shm_size: 1g` if heavy pages crash); on a 4 GiB box uncomment `mem_limit`; a uid other than 1000 gets a bind-mounted home under `~/omni-docker/home` instead of the named volume; the installer reuses this PC's cli binaries (read-only) but not its `~/.claude`/`~/.codex`/`~/.gemini` — an agent in the container must not be able to read or rewrite your own logins and settings — and `OMNI_SHARE_HOST_CLIS=1 bash install-docker.sh` opts back into sharing them (sessions then also show up in `claude --resume` on the PC). Build locally with `docker build -t omni .` (`--build-arg AI_MEMORY_VERSION=vX.Y.Z` pins ai-memory).
 
 ## Setup
 

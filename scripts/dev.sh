@@ -5,10 +5,12 @@
 # Safe to re-run: it rebuilds the image and recreates the container with it,
 # replacing any running dev server with the new build.
 # Like scripts/install-docker.sh, the claude/codex/gemini binaries on this PC
-# are bind-mounted read-only and ~/.claude ~/.codex ~/.gemini logins are shared
-# (generated docker-compose.dev.override.yml); a cli this PC lacks, or has as a
-# node script, is npm-installed inside the volume. OMNI_NO_HOST_CLIS=1 installs
-# every cli inside instead. ~/.local/bin/omni-dev wraps `docker exec omni-dev omni`.
+# are bind-mounted read-only (generated docker-compose.dev.override.yml); a cli
+# this PC lacks, or has as a node script, is npm-installed inside the volume.
+# Logins stay in the volume (docker exec -it omni-dev claude login, once);
+# OMNI_SHARE_HOST_CLIS=1 bind-mounts ~/.claude ~/.codex ~/.gemini instead and
+# hands any agent in the container this PC's credentials. OMNI_NO_HOST_CLIS=1
+# installs every cli inside. ~/.local/bin/omni-dev wraps `docker exec omni-dev omni`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -76,11 +78,14 @@ detect_cli() {
   fi
 }
 for c in claude codex gemini; do detect_cli "$c"; done
-if [[ "${OMNI_NO_HOST_CLIS:-}" != 1 ]]; then
+if [[ "${OMNI_SHARE_HOST_CLIS:-}" == 1 ]]; then
+  gum log --level warn "OMNI_SHARE_HOST_CLIS=1: agents in the container can read and rewrite this PC's cli logins"
   for d in .claude .codex .gemini; do
     [[ -d "$HOME/$d" ]] && MOUNTS+=("$HOME/$d:/home/omni/$d")
   done
   [[ -f "$HOME/.claude.json" ]] && MOUNTS+=("$HOME/.claude.json:/opt/host/claude/claude.json:ro")
+else
+  gum log --level info "cli logins stay in the volume — once: docker exec -it omni-dev claude login"
 fi
 setenv OMNI_VENDOR_INSTALL "$(IFS=,; echo "${INSTALL[*]-}")"
 
