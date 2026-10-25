@@ -49,7 +49,7 @@ func (s *Server) opsAction(act string) tgReply {
 		return tgReply{Text: "🛠 omni " + version + "\n" + text}
 	case "doctor":
 		// the "$ omni doctor" one-shot: streamed output, /interrupt works
-		go s.deliverOneShot(context.Background(), "", app+" doctor")
+		go s.deliverOneShot(context.Background(), app+" doctor")
 		return tgReply{}
 	case "logs":
 		return opsLogs()
@@ -79,7 +79,7 @@ func (s *Server) opsAction(act string) tgReply {
 		return tgReply{Text: "🔎 checking for updates (current " + version + ") — " + follow + "; silence means up to date"}
 	case "terminal":
 		s.termMu.Lock()
-		active := s.term != nil || s.termPending != nil
+		active := s.term != nil
 		s.termMu.Unlock()
 		if active {
 			return tgReply{Text: "already in terminal mode"}

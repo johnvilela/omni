@@ -29,7 +29,7 @@ type tgReply struct {
 	Keyboard      [][]button
 	Edit          bool // replace the tapped message (text + keyboard) instead of sending a new one
 	StripKeyboard bool // remove the tapped message's now-stale buttons, then send Text as usual
-	DeleteInbound bool // delete the message that triggered this reply (a sudo password, a /clear)
+	DeleteInbound bool // delete the message that triggered this reply (a /clear, a /new)
 }
 
 // tgFile is one inbound photo/document's metadata — no bytes; the download
@@ -402,7 +402,7 @@ func (t *Telegram) Poll(ctx context.Context) {
 			reply := t.answer(ctx, from, u.Message.Text)
 			stop()
 			if reply.DeleteInbound {
-				t.deleteMessage(ctx, u.Message.Chat.ID, u.Message.MessageID) // best-effort: keep the sudo password out of history
+				t.deleteMessage(ctx, u.Message.Chat.ID, u.Message.MessageID) // best-effort: keep the trigger out of history
 			} else {
 				t.track(u.Message.Chat.ID, u.Message.MessageID)
 			}

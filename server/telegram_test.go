@@ -517,7 +517,7 @@ func TestTelegramSendChunks(t *testing.T) {
 
 // TestTelegramTracksMessageIDs: the poller reports every inbound message id
 // and every sent message id to the seen hook, so /clear can delete them —
-// except an inbound the reply asked to delete (a sudo password).
+// except an inbound the reply asked to delete (a /clear).
 func TestTelegramTracksMessageIDs(t *testing.T) {
 	const updates = `{"update_id":6,"message":{"message_id":5,"chat":{"id":42},"from":{"id":99},"text":"hello"}},` +
 		`{"update_id":7,"message":{"message_id":6,"chat":{"id":42},"from":{"id":99},"text":"secret"}}`

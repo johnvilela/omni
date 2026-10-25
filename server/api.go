@@ -47,7 +47,6 @@ type Server struct {
 
 	termMu        sync.Mutex
 	term          *termSession       // /terminal root shell; nil = not in terminal mode
-	termPending   *termPending       // awaiting the next message as the sudo password
 	termCwd       string             // display cwd for the pin indicator (last sentinel)
 	oneShotCancel context.CancelFunc // running "$" one-shot's ^C; nil = none
 }
