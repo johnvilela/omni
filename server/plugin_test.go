@@ -160,7 +160,7 @@ func TestPluginsSyncEndpoint(t *testing.T) {
 
 	// no poller yet: best-effort, published false
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/plugins/sync", nil))
+	srv.Handler().ServeHTTP(rec, authReq("POST", "/plugins/sync", testAPIToken, ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"published":false`) {
 		t.Fatalf("sync without tg = %d %s", rec.Code, rec.Body.String())
 	}
@@ -181,7 +181,7 @@ func TestPluginsSyncEndpoint(t *testing.T) {
 	srv.mu.Unlock()
 
 	rec = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/plugins/sync", nil))
+	srv.Handler().ServeHTTP(rec, authReq("POST", "/plugins/sync", testAPIToken, ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"published":true`) {
 		t.Fatalf("sync with tg = %d %s", rec.Code, rec.Body.String())
 	}

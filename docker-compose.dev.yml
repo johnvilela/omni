@@ -18,7 +18,7 @@ services:
     stop_grace_period: 30s
     env_file: .env.dev
     ports:
-      - "127.0.0.1:8788:8787"   # loopback only: the api has no auth
+      - "127.0.0.1:8788:8787"   # loopback only; every route but /status also needs the bearer token
     volumes:
       - omni-dev-home:/home/omni  # config, db, plugins, cli logins, ai-memory, chrome profile
 volumes:

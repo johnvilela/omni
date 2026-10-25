@@ -33,6 +33,8 @@ AI_CONFIG="$CONFIG/ai-memory/config.toml"
 AI_ENV="$OMNI_CONFIG/ai-memory.env"
 PORT=${OMNI_ADDR:-:8787}; PORT=${PORT##*:}
 API="http://127.0.0.1:$PORT"
+# every route but /status needs the bearer token omni-server writes on start
+api() { curl -fsS -H "Authorization: Bearer $(cat "$DATA/omni/api-token" 2>/dev/null)" "$@"; }
 # unset would mean "oneshot" to the guardian, which the respawn loop would then
 # restart every 2s — default the loop cadence instead
 : "${OMNI_GUARDIAN_INTERVAL:=2m}"; export OMNI_GUARDIAN_INTERVAL
@@ -154,8 +156,8 @@ post_start() {
   wait_status 60 || warn "omni-server did not answer /status within 60s — see docker logs"
   info "omni-server $(curl -fsS "$API/status" 2>/dev/null || echo 'not responding')"
   if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] \
-     && ! curl -fsS "$API/channels/telegram" 2>/dev/null | grep -q '"connected":true'; then
-    curl -fsS -X POST "$API/channels/telegram/connect" -H 'Content-Type: application/json' -d '{}' >/dev/null \
+     && ! api "$API/channels/telegram" 2>/dev/null | grep -q '"connected":true'; then
+    api -X POST "$API/channels/telegram/connect" -H 'Content-Type: application/json' -d '{}' >/dev/null \
       && info "telegram connected from TELEGRAM_BOT_TOKEN" \
       || warn "telegram connect failed — check TELEGRAM_BOT_TOKEN, then: omni channels connect -c telegram"
   fi

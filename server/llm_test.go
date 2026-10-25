@@ -333,6 +333,7 @@ func TestLLMStatusModelEffort(t *testing.T) {
 func getModels(t *testing.T, h http.Handler, provider string) (int, []string) {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/llm/"+provider+"/models", nil)
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	var ms []string
