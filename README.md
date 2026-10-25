@@ -156,7 +156,7 @@ omni plugins install owner/repo
 
 ## Development
 
-Building from source needs [Go](https://go.dev) 1.27+ and [gum](https://github.com/charmbracelet/gum). `scripts/dev.sh` builds the working tree and installs a parallel `omni-dev` stack (own port `:8788`, own config and database) that coexists with your production install. `scripts/build.sh` is the single build entrypoint (`PROD=1`, `APP`, `ADDR` knobs; `build.sh all` produces the release matrix). `scripts/uninstall.sh` removes everything, prompting before touching data.
+Building from source needs [Go](https://go.dev) 1.27+. `scripts/dev.sh` needs [Docker](https://docs.docker.com/engine/install/) with the compose plugin and [gum](https://github.com/charmbracelet/gum): it builds the working tree into the `omni:dev` image and runs it as the `omni-dev` container (`docker-compose.dev.yml`: port `127.0.0.1:8788`, volume `omni-dev-home`, settings in a gitignored `.env.dev`), sharing your `claude`/`codex`/`gemini` logins like the docker installer, and drops an `omni-dev` wrapper in `~/.local/bin`. It coexists with a production install. `scripts/build.sh` is the single build entrypoint (`PROD=1`, `APP`, `ADDR` knobs; `build.sh all` produces the release matrix). `scripts/uninstall.sh` removes everything (`--dev`: only the dev container), prompting before touching data.
 
 ## License
 
