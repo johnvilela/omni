@@ -55,6 +55,18 @@ if [[ ! -f $ENV ]]; then
   gum log --level info "$ENV created — put a dev bot token in TELEGRAM_BOT_TOKEN there (not the prod bot)"
 fi
 
+# --- api token: one value for the container and a host-built omni-dev cli ------------
+# The server takes OMNI_API_TOKEN from the env instead of generating one in the
+# volume; the same value lands in ~/.local/share/omni-dev/api-token (0600), where
+# a host `scripts/build.sh` cli (APP=omni-dev ADDR=:8788) reads it. So the host
+# binary talks to the container's api straight over 127.0.0.1:8788, no docker exec.
+if [[ -z "$(getenv OMNI_API_TOKEN)" ]]; then
+  setenv OMNI_API_TOKEN "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
+TOKEN_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omni-dev"
+mkdir -p "$TOKEN_DIR" && chmod 700 "$TOKEN_DIR"
+umask 077; printf '%s\n' "$(getenv OMNI_API_TOKEN)" > "$TOKEN_DIR/api-token"; umask 022
+
 # --- host clis: share what this PC has, install the rest inside -----------------
 MOUNTS=()
 INSTALL=()
@@ -136,6 +148,7 @@ esac
 lines=(
   "container omni-dev: $st · api 127.0.0.1:8788 · volume omni-dev-home · settings $ENV"
   "cli: omni-dev <cmd>  (docker exec -it omni-dev omni <cmd>)"
+  "host cli: APP=omni-dev ADDR=:8788 scripts/build.sh → bin/omni-dev status  (token in $TOKEN_DIR/api-token)"
 )
 if [[ -z "$(getenv TELEGRAM_BOT_TOKEN)" ]]; then
   lines+=("telegram: set TELEGRAM_BOT_TOKEN in $ENV and re-run, or: omni-dev channels connect -c telegram")
