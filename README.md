@@ -128,6 +128,8 @@ Notes: the API port is published on `127.0.0.1` only and every route but `/statu
    omni doctor
    ```
 
+Agent sessions run inside the vendor cli's own sandbox by default: Claude gets `--permission-mode acceptEdits` with no one to answer prompts and an allowlist of tools (files, search, web, the browser through `playwright-cli`/`chromium`, omni's MCP servers); Codex gets `--sandbox workspace-write` with network on. Arbitrary shell is denied. If you accept that a page or document an agent reads could steer it with the full reach of your account, set `agent_permissions: full` in `~/.config/omni/config.yaml` to restore `--dangerously-skip-permissions` / `--dangerously-bypass-approvals-and-sandbox`. Either way, children never inherit the bot token, the api token or another provider's keys.
+
 ## Usage
 
 | Command | What it does |

@@ -193,6 +193,7 @@ func runCLI(ctx context.Context, dir string, timeout time.Duration, name string,
 	var out, errb bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	cmd.Env = vendorEnv(name) // allowlist: no bot/api/other-provider secrets
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
