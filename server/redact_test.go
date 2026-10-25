@@ -28,7 +28,7 @@ func TestTransportErrorsHideSecrets(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "AUDIT_BOT_SECRET") {
 		t.Fatalf("GetMe error leaks the token: %v", err)
 	}
-	if err := tg.upload(context.Background(), "sendDocument", "document", 1, os.Args[0]); err == nil || strings.Contains(err.Error(), "AUDIT_BOT_SECRET") {
+	if err := tg.upload(context.Background(), "sendDocument", "document", 1, "x", strings.NewReader("x")); err == nil || strings.Contains(err.Error(), "AUDIT_BOT_SECRET") {
 		t.Fatalf("upload error leaks the token: %v", err)
 	}
 

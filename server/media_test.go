@@ -230,6 +230,46 @@ func TestChatFileTools(t *testing.T) {
 			t.Fatalf("jail escape %q = %q; want refusal", line, got)
 		}
 	}
+
+	// the jail, SEC-06: a symlink planted inside the folder (intermediate dir
+	// or final file) must not reach outside — os.Root refuses the escape
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "private.txt")
+	if err := os.WriteFile(outside, []byte("AUDIT_PRIVATE_SENTINEL"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(filesDir(), "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(filesDir(), "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		`TOOL:read_file {"path":"escape/private.txt"}`,
+		`TOOL:read_file {"path":"link.txt"}`,
+		`TOOL:write_file {"path":"escape/private.txt","content":"AUDIT_REPLACED"}`,
+		`TOOL:write_file {"path":"link.txt","content":"AUDIT_REPLACED"}`,
+		`TOOL:write_file {"path":"escape/new.txt","content":"AUDIT_REPLACED"}`,
+		`TOOL:edit_file {"path":"link.txt","find":"AUDIT","replace":"X"}`,
+		`TOOL:delete_file {"path":"escape/private.txt"}`,
+		`TOOL:delete_file {"path":"link.txt"}`,
+		`TOOL:send_file {"path":"escape/private.txt"}`,
+		`TOOL:analyze_file {"path":"escape/private.txt","question":"?"}`,
+	} {
+		got := srv.applyTools(ctx, "", line)
+		if !strings.HasPrefix(got, "⚠") || strings.Contains(got, "AUDIT_PRIVATE_SENTINEL") {
+			t.Fatalf("symlink escape %q = %q; want refusal", line, got)
+		}
+	}
+	if raw, err := os.ReadFile(outside); err != nil || string(raw) != "AUDIT_PRIVATE_SENTINEL" {
+		t.Fatalf("outside file changed: %q %v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "new.txt")); err == nil {
+		t.Fatal("write_file created a file outside the jail")
+	}
+	if _, err := os.Lstat(filepath.Join(filesDir(), "link.txt")); err != nil {
+		t.Fatal("delete_file removed the symlink itself; want refusal (not a regular file)")
+	}
 }
 
 // TestChatPromptCarriesFileTools: every chat prompt teaches the file toolkit.
@@ -304,7 +344,7 @@ func TestSendFilePhotoFallback(t *testing.T) {
 	if err := os.WriteFile(jpg, []byte("DATA"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := srv.sendFile(context.Background(), `{"path":"`+jpg+`"}`, resolveWorkspace); got != "📎 sent big.jpg" {
+	if got := srv.sendFile(context.Background(), `{"path":"`+jpg+`"}`, openWorkspace); got != "📎 sent big.jpg" {
 		t.Fatalf("sendFile = %q; want 📎 sent big.jpg", got)
 	}
 	nextCall(t, calls, "sendPhoto")

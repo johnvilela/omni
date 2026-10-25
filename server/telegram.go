@@ -9,8 +9,6 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -247,9 +245,10 @@ func (t *Telegram) deleteMessages(ctx context.Context, chatID int64, ids []int64
 	return t.call(ctx, "deleteMessages", map[string]any{"chat_id": chatID, "message_ids": ids}, nil)
 }
 
-// downloadFile resolves a file_id via getFile and streams the bytes to dest.
-// Telegram caps getFile at 20MB — bigger files just surface its error.
-func (t *Telegram) downloadFile(ctx context.Context, fileID, dest string) error {
+// downloadFile resolves a file_id via getFile and streams the bytes into out
+// (the caller owns the file: it creates it inside the jail and removes it on
+// error). Telegram caps getFile at 20MB — bigger files just surface its error.
+func (t *Telegram) downloadFile(ctx context.Context, fileID string, out io.Writer) error {
 	var f struct {
 		FilePath string `json:"file_path"`
 	}
@@ -268,31 +267,18 @@ func (t *Telegram) downloadFile(ctx context.Context, fileID, dest string) error 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("telegram file download: %s", resp.Status)
 	}
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		out.Close()
-		os.Remove(dest) // no partial files in the inbox
-		return err
-	}
-	return out.Close()
+	_, err = io.Copy(out, resp.Body)
+	return err
 }
 
-// upload sends one local file via multipart; method/field are
-// sendPhoto/photo or sendDocument/document.
-func (t *Telegram) upload(ctx context.Context, method, field string, chatID int64, path string) error {
-	in, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
+// upload sends one already-open file via multipart under name; method/field
+// are sendPhoto/photo or sendDocument/document.
+func (t *Telegram) upload(ctx context.Context, method, field string, chatID int64, name string, in io.Reader) error {
 	// ponytail: whole file buffered (telegram caps uploads at 50MB); io.Pipe if it hurts
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	w.WriteField("chat_id", strconv.FormatInt(chatID, 10))
-	part, err := w.CreateFormFile(field, filepath.Base(path))
+	part, err := w.CreateFormFile(field, name)
 	if err != nil {
 		return err
 	}

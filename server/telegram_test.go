@@ -1,14 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -298,13 +297,12 @@ func TestTelegramDownloadFile(t *testing.T) {
 	defer srv.Close()
 
 	tg := NewTelegram(srv.URL, "TOKEN")
-	dest := filepath.Join(t.TempDir(), "x.pdf")
-	if err := tg.downloadFile(context.Background(), "f1", dest); err != nil {
+	var dest bytes.Buffer
+	if err := tg.downloadFile(context.Background(), "f1", &dest); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(dest)
-	if err != nil || string(raw) != "PDFBYTES" {
-		t.Fatalf("downloaded = %q, %v; want PDFBYTES", raw, err)
+	if dest.String() != "PDFBYTES" {
+		t.Fatalf("downloaded = %q; want PDFBYTES", dest.String())
 	}
 }
 
@@ -334,12 +332,8 @@ func TestTelegramUpload(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	path := filepath.Join(t.TempDir(), "x.pdf")
-	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	tg := NewTelegram(srv.URL, "TOKEN")
-	if err := tg.upload(context.Background(), "sendDocument", "document", 42, path); err != nil {
+	if err := tg.upload(context.Background(), "sendDocument", "document", 42, "x.pdf", strings.NewReader("hello")); err != nil {
 		t.Fatal(err)
 	}
 }
