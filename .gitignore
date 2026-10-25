@@ -3,3 +3,5 @@ dist/
 .memoria/
 .env
 docker-compose.override.yml
+.env.dev
+docker-compose.dev.override.yml

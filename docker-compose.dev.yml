@@ -1,0 +1,25 @@
+# omni dev stack: the working tree built into the omni:dev image, run as the
+# omni-dev container. Coexists with a prod container (omni, :8787): own name,
+# port 127.0.0.1:8788, own volume omni-dev-home, settings in .env.dev.
+# scripts/dev.sh drives it (build, host cli mounts in the generated
+# docker-compose.dev.override.yml, health wait, omni-dev wrapper); by hand:
+#   docker compose -f docker-compose.dev.yml -f docker-compose.dev.override.yml up -d --build
+# No restart policy: a dev container does not come back on its own after a
+# reboot or daemon restart — re-run scripts/dev.sh.
+name: omni-dev
+services:
+  omni:
+    build: .
+    image: omni:dev
+    container_name: omni-dev
+    hostname: omni-dev        # chromium's profile lock records the hostname: keep it stable
+    user: "1000:1000"         # the image's home is owned by uid 1000; dev.sh refuses other uids
+    init: true                # reaps orphaned chromium/agent processes, forwards signals
+    stop_grace_period: 30s
+    env_file: .env.dev
+    ports:
+      - "127.0.0.1:8788:8787"   # loopback only: the api has no auth
+    volumes:
+      - omni-dev-home:/home/omni  # config, db, plugins, cli logins, ai-memory, chrome profile
+volumes:
+  omni-dev-home:
