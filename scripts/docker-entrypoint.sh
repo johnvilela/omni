@@ -43,6 +43,19 @@ step "omni container: seeding $HOME"
 mkdir -p "$HOME/.local/bin" "$HOME/.local/lib" "$OMNI_CONFIG" "$AGENT_DIR/chrome-profile" "$AI_DATA" "${AI_CONFIG%/*}"
 # chromium cannot be running at container start: drop a stale profile lock
 rm -f "$AGENT_DIR"/chrome-profile/Singleton{Lock,Socket,Cookie}
+# a shared ~/.claude carries the host's absolute paths (ai-memory hooks:
+# --data-dir /home/<user>/.local/share/ai-memory); without this link they point
+# nowhere in here and every hook event is silently skipped. /home is owned by
+# omni in the image so no root is needed
+if [ -n "${OMNI_HOST_HOME:-}" ] && [ "$OMNI_HOST_HOME" != "$HOME" ]; then
+  if [ -L "$OMNI_HOST_HOME" ] || [ ! -e "$OMNI_HOST_HOME" ]; then
+    ln -sfn "$HOME" "$OMNI_HOST_HOME" 2>/dev/null \
+      && info "$OMNI_HOST_HOME -> $HOME (host paths in shared configs resolve)" \
+      || warn "could not link $OMNI_HOST_HOME -> $HOME; host-path hooks in shared configs will not capture"
+  else
+    warn "$OMNI_HOST_HOME exists and is not a link; host-path hooks in shared configs will not capture"
+  fi
+fi
 
 if [ ! -f "$AI_ENV" ]; then
   printf '%s\n' 'AI_MEMORY_DECAY__OBSERVATION_RETENTION_DAYS=30' > "$AI_ENV"

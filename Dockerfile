@@ -62,7 +62,8 @@ RUN userdel -r node && (groupdel node 2>/dev/null || true) \
     && groupadd -g 1000 omni && useradd -u 1000 -g 1000 -m -s /bin/bash omni \
     && mkdir -p /opt/host /home/omni/.local/bin /home/omni/.local/lib /home/omni/.config/omni \
                 /home/omni/.local/share/omni/agent/chrome-profile \
-    && chown -R omni:omni /home/omni
+    && chown -R omni:omni /home/omni \
+    && chown omni:omni /home   # the entrypoint symlinks the host's home path here (OMNI_HOST_HOME)
 
 COPY --from=build /out/omni /out/omni-server /out/omni-guardian /usr/local/bin/
 COPY --chmod=755 scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

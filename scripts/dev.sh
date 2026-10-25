@@ -83,6 +83,8 @@ if [[ "${OMNI_NO_HOST_CLIS:-}" != 1 ]]; then
   [[ -f "$HOME/.claude.json" ]] && MOUNTS+=("$HOME/.claude.json:/opt/host/claude/claude.json:ro")
 fi
 setenv OMNI_VENDOR_INSTALL "$(IFS=,; echo "${INSTALL[*]-}")"
+# shared ~/.claude ~/.codex carry host-absolute paths: the container links this to its home
+setenv OMNI_HOST_HOME "$HOME"
 
 # the override carries everything specific to this PC; docker-compose.dev.yml
 # stays the committed generic file

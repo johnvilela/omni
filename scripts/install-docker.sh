@@ -123,6 +123,8 @@ else
   fi
 fi
 setenv OMNI_VENDOR_INSTALL "$(IFS=,; echo "${INSTALL[*]-}")"
+# shared ~/.claude ~/.codex carry host-absolute paths: the container links this to its home
+setenv OMNI_HOST_HOME "$HOME"
 
 # --- container user: the volume is owned by uid 1000, other uids get a bind home -
 UID_=$(id -u) GID_=$(id -g)
