@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -141,7 +140,7 @@ func runChatCLI(ctx context.Context, provider, text string) (string, callUsage, 
 func (s *Server) answerNotice(ctx context.Context, sess Session, text string) string {
 	reply, err := s.chatAnswer(ctx, sess, text)
 	if err != nil {
-		return "⚠ " + err.Error()
+		return "⚠ " + redactSecrets(err.Error())
 	}
 	return reply // "" = approval proposal sent out-of-band, nothing to deliver
 }
@@ -198,17 +197,23 @@ func runCLI(ctx context.Context, dir string, timeout time.Duration, name string,
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
 		// stderr can echo the whole composed prompt (codex does — chat
-		// history included), and this error reaches the chat as the reply.
-		// Full dump to the server log; only the last line to the user.
+		// history included), and this error reaches the chat as the reply and
+		// the server log. Neither gets the dump: only the last line, scrubbed
+		// and capped, plus the size so a dev knows there was more.
 		stderr := strings.TrimSpace(errb.String())
 		if stderr == "" {
 			return "", fmt.Errorf("%s: %v", name, err)
 		}
-		log.Printf("%s failed: %v\n%s", name, err, stderr)
+		last := stderr
 		if i := strings.LastIndexByte(stderr, '\n'); i >= 0 {
-			stderr = strings.TrimSpace(stderr[i+1:])
+			last = strings.TrimSpace(stderr[i+1:])
 		}
-		return "", fmt.Errorf("%s: %v: %s", name, err, stderr)
+		last = redactSecrets(last)
+		if len(last) > 200 {
+			last = last[:200] + "…"
+		}
+		log.Printf("%s failed: %v (stderr %d bytes): %s", name, err, len(stderr), last)
+		return "", fmt.Errorf("%s: %v: %s", name, err, last)
 	}
 	return out.String(), nil
 }
@@ -216,6 +221,7 @@ func runCLI(ctx context.Context, dir string, timeout time.Duration, name string,
 // askAPI does one plain text-in/text-out call against a provider's HTTP API,
 // also returning the token usage the response reports.
 func askAPI(ctx context.Context, provider, key, text string) (string, callUsage, error) {
+	registerSecret(key)
 	base := llmAPIBase(provider)
 	model := configuredModel(provider)
 	if model == "" {
@@ -280,9 +286,12 @@ func askAPI(ctx context.Context, provider, key, text string) (string, callUsage,
 			return r.Content[0].Text, nil
 		}
 	case "gemini":
-		req, err = jsonReq(ctx, base+"/v1beta/models/"+model+":generateContent?key="+url.QueryEscape(key), map[string]any{
+		req, err = jsonReq(ctx, base+"/v1beta/models/"+model+":generateContent", map[string]any{
 			"contents": []map[string]any{{"parts": []map[string]string{{"text": text}}}},
 		})
+		if err == nil {
+			req.Header.Set("x-goog-api-key", key) // never in the URL: transport errors print it
+		}
 		parse = func(d *json.Decoder) (string, error) {
 			var r struct {
 				Candidates []struct {
@@ -309,7 +318,7 @@ func askAPI(ctx context.Context, provider, key, text string) (string, callUsage,
 	}
 	resp, err := answerHTTP.Do(req)
 	if err != nil {
-		return "", callUsage{}, err
+		return "", callUsage{}, redactErr(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

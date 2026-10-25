@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -71,6 +72,7 @@ func sentID(raw json.RawMessage) int64 {
 }
 
 func NewTelegram(apiBase, token string) *Telegram {
+	registerSecret(token)
 	return &Telegram{
 		base:    apiBase + "/bot" + token,
 		apiBase: apiBase,
@@ -115,6 +117,17 @@ type update struct {
 	} `json:"callback_query"`
 }
 
+// do is the one place Telegram requests leave: a transport error's text
+// carries the request URL, and the URL carries the bot token, so the error is
+// scrubbed here before anyone logs it or sends it to chat.
+func (t *Telegram) do(req *http.Request) (*http.Response, error) {
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return nil, &redactedError{msg: strings.ReplaceAll(redactSecrets(err.Error()), t.token, "***"), err: err}
+	}
+	return resp, nil
+}
+
 type apiResponse struct {
 	OK          bool            `json:"ok"`
 	Description string          `json:"description"`
@@ -133,7 +146,7 @@ func (t *Telegram) call(ctx context.Context, method string, body any, out any) e
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := t.client.Do(req)
+	resp, err := t.do(req)
 	if err != nil {
 		return err
 	}
@@ -247,7 +260,7 @@ func (t *Telegram) downloadFile(ctx context.Context, fileID, dest string) error 
 	if err != nil {
 		return err
 	}
-	resp, err := t.client.Do(req)
+	resp, err := t.do(req)
 	if err != nil {
 		return err
 	}
@@ -294,7 +307,7 @@ func (t *Telegram) upload(ctx context.Context, method, field string, chatID int6
 		return err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	resp, err := t.client.Do(req)
+	resp, err := t.do(req)
 	if err != nil {
 		return err
 	}

@@ -26,11 +26,13 @@ func apiTokenPath() string {
 // file, generating and persisting (0600) a fresh one when neither exists.
 func loadOrCreateAPIToken() (string, error) {
 	if t := strings.TrimSpace(os.Getenv("OMNI_API_TOKEN")); t != "" {
+		registerSecret(t)
 		return t, nil
 	}
 	path := apiTokenPath()
 	if raw, err := os.ReadFile(path); err == nil {
 		if t := strings.TrimSpace(string(raw)); t != "" {
+			registerSecret(t)
 			return t, nil
 		}
 	}
@@ -39,6 +41,7 @@ func loadOrCreateAPIToken() (string, error) {
 		return "", err
 	}
 	t := hex.EncodeToString(buf)
+	registerSecret(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}

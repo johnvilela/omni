@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -23,10 +22,6 @@ func inContainer() bool { return os.Getenv("OMNI_CONTAINER") == "1" }
 
 // exitFn and restartDelay are vars so tests swap the exit and skip the wait.
 var exitFn, restartDelay = os.Exit, 2 * time.Second
-
-// botTokenRe scrubs telegram bot tokens that transport errors embed in URLs —
-// log lines go to chat, the token must not (twin of cli/doctor.go).
-var botTokenRe = regexp.MustCompile(`bot\d+:[\w-]+`)
 
 func (s *Server) opsMenu() tgReply {
 	return tgReply{Text: "🛠 omni " + version, Keyboard: [][]button{
@@ -119,7 +114,7 @@ func opsLogs() tgReply {
 	if err != nil {
 		return tgReply{Text: "⚠ journalctl: " + err.Error()}
 	}
-	text := strings.TrimSpace(botTokenRe.ReplaceAllString(string(out), "bot***"))
+	text := strings.TrimSpace(redactSecrets(string(out)))
 	if text == "" {
 		text = "(no recent log lines)"
 	}

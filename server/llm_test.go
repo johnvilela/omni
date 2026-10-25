@@ -35,7 +35,7 @@ func newLLMTestServer(t *testing.T) (*Server, *Store) {
 		}
 	})
 	mux.HandleFunc("/v1beta/models", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("key") == "GOOD" {
+		if r.Header.Get("x-goog-api-key") == "GOOD" {
 			fmt.Fprint(w, `{"models":[{"name":"models/gemini-test","supportedGenerationMethods":["generateContent"]},{"name":"models/embedding-test","supportedGenerationMethods":["embedContent"]}]}`)
 			return
 		}
@@ -57,7 +57,7 @@ func newLLMTestServer(t *testing.T) (*Server, *Store) {
 		fmt.Fprint(w, `{"content":[{"type":"text","text":"pong"}]}`)
 	})
 	mux.HandleFunc("/v1beta/models/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("key") != "GOOD" {
+		if r.Header.Get("x-goog-api-key") != "GOOD" {
 			w.WriteHeader(401)
 			return
 		}
