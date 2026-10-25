@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,11 +28,64 @@ const (
 // serves every read, write and capture; omni never starts a per-request MCP
 // process, which matters on low-memory machines and rotational disks.
 type aiMemoryClient struct {
-	base   string
-	http   *http.Client
-	mu     sync.Mutex
-	initOK bool
-	seq    atomic.Int64
+	base     string
+	http     *http.Client
+	mu       sync.Mutex
+	initOK   bool
+	seq      atomic.Int64
+	lastWarn atomic.Int64 // unix seconds of the last rejected-request warning
+}
+
+// aiMemoryToken is the bearer token ai-memory 3.2+ demands on every HTTP
+// request, loopback included. ai-memory writes it to <data>/ai-memory/auth-token
+// (the same XDG data root omni uses, on the host and in the container). Read
+// per request: the file appears on first serve and changes on `auth enable`,
+// both while omni is running. OMNI_AI_MEMORY_TOKEN overrides it for a remote
+// or custom setup. Empty means no header: an older ai-memory with auth off.
+func aiMemoryToken() string {
+	if t := os.Getenv("OMNI_AI_MEMORY_TOKEN"); t != "" {
+		return t
+	}
+	base := os.Getenv("XDG_DATA_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		base = filepath.Join(home, ".local", "share")
+	}
+	b, err := os.ReadFile(filepath.Join(base, "ai-memory", "auth-token"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// authorize adds the bearer token when one exists and reports whether it did,
+// so a rejection can say which case it was.
+func (m *aiMemoryClient) authorize(req *http.Request) bool {
+	t := aiMemoryToken()
+	if t == "" {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+t)
+	return true
+}
+
+// rejected logs a non-2xx answer at most once a minute. Memory is best-effort
+// and must not flood the log on every chat turn, but a 401 from an upgraded
+// ai-memory has to show up somewhere: silent, it looked like a bot with no memory.
+func (m *aiMemoryClient) rejected(path, status string, withToken bool) {
+	now := time.Now().Unix()
+	last := m.lastWarn.Load()
+	if now-last < 60 || !m.lastWarn.CompareAndSwap(last, now) {
+		return
+	}
+	tok := "with token"
+	if !withToken {
+		tok = "no token: expected OMNI_AI_MEMORY_TOKEN or <data>/ai-memory/auth-token"
+	}
+	log.Printf("ai-memory: %s %s rejected (%s) — memory is off until this is fixed", path, status, tok)
 }
 
 type aiCallContext struct{ sessionID, purpose string }
@@ -69,12 +123,14 @@ func (m *aiMemoryClient) rpc(ctx context.Context, method string, params any, out
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	withToken := m.authorize(req)
 	resp, err := m.http.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
+		m.rejected("/mcp", resp.Status, withToken)
 		return fmt.Errorf("ai-memory HTTP %s", resp.Status)
 	}
 	var envelope struct {
@@ -279,9 +335,14 @@ func (m *aiMemoryClient) capture(ctx context.Context, event, sourceEvent, sessio
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	withToken := m.authorize(req)
 	resp, err := m.http.Do(req)
-	if err == nil {
-		resp.Body.Close()
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		m.rejected("/hook", resp.Status, withToken)
 	}
 }
 
