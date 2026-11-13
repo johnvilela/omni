@@ -241,7 +241,7 @@ func (m *aiMemoryClient) captureCall(ctx context.Context, sessionID, purpose, pr
 	event := purpose + ".response"
 	message := reply
 	if callErr != nil {
-		event, message = purpose+".error", callErr.Error()
+		event, message = purpose+".error", redactSecrets(callErr.Error())
 	}
 	m.capture(ctx, "notification", event, sessionID, map[string]any{"message": captureTail(message, 2*1024)})
 }

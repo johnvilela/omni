@@ -28,7 +28,15 @@ type Config struct {
 	ApprovalTools []string `yaml:"approval_tools"` // TOOL names needing approval; unset = default privileged set
 	ApprovalSkip  []string `yaml:"approval_skip"`  // whitelisted via ✅ always — subtracted from the gated set
 	UpdateRepos   []string `yaml:"update_repos"`   // GitHub owner/name repos the guardian watches for releases
+	// agent-mode containment (server/agent.go agentArgs): "full" hands the
+	// vendor cli --dangerously-skip-permissions / --dangerously-bypass-
+	// approvals-and-sandbox; anything else (the default) keeps the vendor's
+	// own sandbox and permission prompts, with a short allowlist of tools
+	AgentPermissions string `yaml:"agent_permissions"`
 }
+
+// agentFullPermissions is the owner's explicit opt-in to unrestricted agents.
+func agentFullPermissions() bool { return readConfig().AgentPermissions == "full" }
 
 // readConfig loads ~/.config/omni/config.yaml; zero Config on any error.
 func readConfig() Config {

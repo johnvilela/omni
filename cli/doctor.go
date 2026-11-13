@@ -312,6 +312,12 @@ func serverChecks(c *Client) []check {
 		}
 	}
 	cs := []check{{name: "server up at " + c.Base, ok: true}}
+	if apiToken() == "" {
+		cs = append(cs, check{
+			name: "api token unreadable: " + apiTokenPath(),
+			fix:  "the server writes it on start; run the cli as the server's user, or export OMNI_API_TOKEN",
+		})
+	}
 	if st.App != app {
 		cs = append(cs, check{
 			name: fmt.Sprintf("a different app (%s) answers at %s — dev/prod mixup?", st.App, c.Base),

@@ -5,10 +5,12 @@
 # Safe to re-run: it rebuilds the image and recreates the container with it,
 # replacing any running dev server with the new build.
 # Like scripts/install-docker.sh, the claude/codex/gemini binaries on this PC
-# are bind-mounted read-only and ~/.claude ~/.codex ~/.gemini logins are shared
-# (generated docker-compose.dev.override.yml); a cli this PC lacks, or has as a
-# node script, is npm-installed inside the volume. OMNI_NO_HOST_CLIS=1 installs
-# every cli inside instead. ~/.local/bin/omni-dev wraps `docker exec omni-dev omni`.
+# are bind-mounted read-only (generated docker-compose.dev.override.yml); a cli
+# this PC lacks, or has as a node script, is npm-installed inside the volume.
+# Logins stay in the volume (docker exec -it omni-dev claude login, once);
+# OMNI_SHARE_HOST_CLIS=1 bind-mounts ~/.claude ~/.codex ~/.gemini instead and
+# hands any agent in the container this PC's credentials. OMNI_NO_HOST_CLIS=1
+# installs every cli inside. ~/.local/bin/omni-dev wraps `docker exec omni-dev omni`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -53,6 +55,18 @@ if [[ ! -f $ENV ]]; then
   gum log --level info "$ENV created — put a dev bot token in TELEGRAM_BOT_TOKEN there (not the prod bot)"
 fi
 
+# --- api token: one value for the container and a host-built omni-dev cli ------------
+# The server takes OMNI_API_TOKEN from the env instead of generating one in the
+# volume; the same value lands in ~/.local/share/omni-dev/api-token (0600), where
+# a host `scripts/build.sh` cli (APP=omni-dev ADDR=:8788) reads it. So the host
+# binary talks to the container's api straight over 127.0.0.1:8788, no docker exec.
+if [[ -z "$(getenv OMNI_API_TOKEN)" ]]; then
+  setenv OMNI_API_TOKEN "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
+TOKEN_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omni-dev"
+mkdir -p "$TOKEN_DIR" && chmod 700 "$TOKEN_DIR"
+umask 077; printf '%s\n' "$(getenv OMNI_API_TOKEN)" > "$TOKEN_DIR/api-token"; umask 022
+
 # --- host clis: share what this PC has, install the rest inside -----------------
 MOUNTS=()
 INSTALL=()
@@ -76,11 +90,14 @@ detect_cli() {
   fi
 }
 for c in claude codex gemini; do detect_cli "$c"; done
-if [[ "${OMNI_NO_HOST_CLIS:-}" != 1 ]]; then
+if [[ "${OMNI_SHARE_HOST_CLIS:-}" == 1 ]]; then
+  gum log --level warn "OMNI_SHARE_HOST_CLIS=1: agents in the container can read and rewrite this PC's cli logins"
   for d in .claude .codex .gemini; do
     [[ -d "$HOME/$d" ]] && MOUNTS+=("$HOME/$d:/home/omni/$d")
   done
   [[ -f "$HOME/.claude.json" ]] && MOUNTS+=("$HOME/.claude.json:/opt/host/claude/claude.json:ro")
+else
+  gum log --level info "cli logins stay in the volume — once: docker exec -it omni-dev claude login"
 fi
 setenv OMNI_VENDOR_INSTALL "$(IFS=,; echo "${INSTALL[*]-}")"
 
@@ -131,6 +148,7 @@ esac
 lines=(
   "container omni-dev: $st · api 127.0.0.1:8788 · volume omni-dev-home · settings $ENV"
   "cli: omni-dev <cmd>  (docker exec -it omni-dev omni <cmd>)"
+  "host cli: APP=omni-dev ADDR=:8788 scripts/build.sh → bin/omni-dev status  (token in $TOKEN_DIR/api-token)"
 )
 if [[ -z "$(getenv TELEGRAM_BOT_TOKEN)" ]]; then
   lines+=("telegram: set TELEGRAM_BOT_TOKEN in $ENV and re-run, or: omni-dev channels connect -c telegram")

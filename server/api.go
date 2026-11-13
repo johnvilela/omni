@@ -47,7 +47,6 @@ type Server struct {
 
 	termMu        sync.Mutex
 	term          *termSession       // /terminal root shell; nil = not in terminal mode
-	termPending   *termPending       // awaiting the next message as the sudo password
 	termCwd       string             // display cwd for the pin indicator (last sentinel)
 	oneShotCancel context.CancelFunc // running "$" one-shot's ^C; nil = none
 }
@@ -129,7 +128,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// Handler is the API behind requireAuth; the token comes from OMNI_API_TOKEN
+// or the token file (see auth.go). Tests set OMNI_API_TOKEN.
 func (s *Server) Handler() http.Handler {
+	token, err := loadOrCreateAPIToken()
+	if err != nil {
+		log.Fatalf("api token: %v", err)
+	}
+	return requireAuth(token, s.routes())
+}
+
+func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"app": app, "version": version})

@@ -32,17 +32,20 @@ var (
 	streamEvery = 3 * time.Second // progress edit cadence
 )
 
-// sudoWord decides whether a "$" one-shot needs the sudo password prompt.
+// sudoWord refuses a command outright: /terminal and "$" run unprivileged. A
+// password typed into Telegram would transit Telegram's servers and every
+// child process's environment, so remote sudo is not offered at all.
 var sudoWord = regexp.MustCompile(`\bsudo\b`)
 
+const sudoRefused = "⚠ sudo is disabled in /terminal — commands run unprivileged as the service user"
+
 // termSession drives /terminal. Commands run as the service user (so the user's
-// own shell config — fish functions, zoxide, mise, aliases — loads); `sudo` is
-// auto-authenticated via SUDO_ASKPASS with the cached password. For bash/zsh
-// it's one long-lived `<shell>` process (cmd/stdin/out set), so cd/env/jobs
-// persist. Fish can't be fed line-by-line over a pipe (it reads to EOF before
-// executing and needs a PTY to run interactively), so a fish session runs each
-// command as a fresh `fish -c` (cmd nil): only cwd persists (tracked here). The
-// validated password is held in memory for the session so it's asked just once.
+// own shell config — fish functions, zoxide, mise, aliases — loads), never as
+// root. For bash/zsh it's one long-lived `<shell>` process (cmd/stdin/out set),
+// so cd/env/jobs persist. Fish can't be fed line-by-line over a pipe (it reads
+// to EOF before executing and needs a PTY to run interactively), so a fish
+// session runs each command as a fresh `fish -c` (cmd nil): only cwd persists
+// (tracked here).
 type termSession struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -51,7 +54,6 @@ type termSession struct {
 	nonce  string
 	shell  string // login shell path, selects the sentinel syntax
 	cwd    string // fish mode: tracked working dir (cmd nil)
-	pass   string // sudo password for SUDO_ASKPASS, memory only, cleared on teardown
 	killed bool   // set by /exit so the worker stays quiet on teardown
 
 	busy   bool               // a command is in flight (guarded by Server.termMu)
@@ -59,36 +61,13 @@ type termSession struct {
 	idle   *time.Timer        // idle-TTL auto-close, armed by startTerminal
 }
 
-// maxSudoTries matches sudo's default: wrong-password attempts before giving up.
-const maxSudoTries = 3
-
-// termPending remembers what to do once the next message delivers the sudo
-// password: open the root shell, or run one parked "$" one-shot. tries counts
-// wrong attempts so /terminal re-prompts like a terminal does.
-type termPending struct {
-	openShell bool
-	oneShot   string
-	tries     int
-}
-
 // handleTerminal is the first thing handleMessage calls. ok=false falls through
 // to normal command/LLM handling; ok=true means this owns the message. In
 // terminal mode every message except /exit and /interrupt is a shell command.
 func (s *Server) handleTerminal(ctx context.Context, text string) (tgReply, bool) {
 	s.termMu.Lock()
-	pending, term := s.termPending, s.term
+	term := s.term
 	s.termMu.Unlock()
-
-	// awaiting the sudo password — this message is it
-	if pending != nil {
-		if text == "/exit" {
-			s.termMu.Lock()
-			s.termPending = nil
-			s.termMu.Unlock()
-			return tgReply{Text: "cancelled"}, true
-		}
-		return s.applyPassword(pending, text), true
-	}
 
 	// inside terminal mode
 	if term != nil {
@@ -99,6 +78,9 @@ func (s *Server) handleTerminal(ctx context.Context, text string) (tgReply, bool
 			return tgReply{Text: "left terminal mode"}, true
 		case "/interrupt":
 			return s.handleInterrupt(), true
+		}
+		if sudoWord.MatchString(text) {
+			return tgReply{Text: sudoRefused}, true
 		}
 		// the send happens under termMu and only while this session is still
 		// current, so it can't race the idle TTL closing the channel
@@ -129,69 +111,37 @@ func (s *Server) handleTerminal(ctx context.Context, text string) (tgReply, bool
 			return tgReply{Text: "usage: $ <command>"}, true
 		}
 		if sudoWord.MatchString(cmd) {
-			s.termMu.Lock()
-			s.termPending = &termPending{oneShot: cmd}
-			s.termMu.Unlock()
-			return tgReply{Text: "🔒 sudo password:"}, true
+			return tgReply{Text: sudoRefused}, true
 		}
-		go s.deliverOneShot(context.Background(), "", cmd)
+		go s.deliverOneShot(context.Background(), cmd)
 		return tgReply{}, true
 	}
 
 	// enter terminal mode
 	if text == "/terminal" {
-		s.termMu.Lock()
-		s.termPending = &termPending{openShell: true}
-		s.termMu.Unlock()
-		return tgReply{Text: "🔒 sudo password to start terminal mode (/exit to cancel):"}, true
+		return s.openTerminal(), true
 	}
 
 	return tgReply{}, false
 }
 
-// applyPassword consumes the password message: validates and opens the root
-// shell, or runs the parked one-shot. A wrong password for /terminal stays armed
-// for another attempt (up to maxSudoTries) instead of dropping the mode. The
-// password is used here and discarded — never stored. DeleteInbound removes the
-// password message from the chat.
-func (s *Server) applyPassword(p *termPending, pass string) tgReply {
-	if p.openShell && !validateSudo(context.Background(), pass) {
-		p.tries++
-		if p.tries >= maxSudoTries {
-			s.setPending(nil)
-			return tgReply{Text: "⚠ wrong sudo password — too many attempts, cancelled", DeleteInbound: true}
-		}
-		s.setPending(p) // stay armed: the next message is another attempt
-		return tgReply{Text: fmt.Sprintf("⚠ wrong sudo password — try again (%d left, /exit to cancel)", maxSudoTries-p.tries), DeleteInbound: true}
+// openTerminal starts the unprivileged shell session and makes it current.
+func (s *Server) openTerminal() tgReply {
+	ts, err := s.startTerminal()
+	if err != nil {
+		return tgReply{Text: "⚠ " + err.Error()}
 	}
-	s.setPending(nil)
-
-	if p.openShell {
-		ts, err := s.startTerminal(pass)
-		if err != nil {
-			return tgReply{Text: "⚠ " + err.Error(), DeleteInbound: true}
-		}
-		s.termMu.Lock()
-		s.term = ts
-		s.termMu.Unlock()
-		go s.refreshPin()
-		return tgReply{Text: "🖥 terminal mode — running as you; `sudo` is auto-authenticated. /exit to leave.", DeleteInbound: true}
-	}
-	go s.deliverOneShot(context.Background(), pass, p.oneShot)
-	return tgReply{DeleteInbound: true}
-}
-
-// setPending swaps the awaiting-password state under the lock.
-func (s *Server) setPending(p *termPending) {
 	s.termMu.Lock()
-	s.termPending = p
+	s.term = ts
 	s.termMu.Unlock()
+	go s.refreshPin()
+	return tgReply{Text: "🖥 terminal mode — running as you (no sudo). /exit to leave."}
 }
 
 // deliverOneShot runs a "$" command and pushes the output to the owner chats,
 // streaming progress while it runs. The cancel is published so /interrupt can
 // ^C it. ponytail: concurrent $ one-shots — last one wins the stored cancel.
-func (s *Server) deliverOneShot(ctx context.Context, pass, cmd string) {
+func (s *Server) deliverOneShot(ctx context.Context, cmd string) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.termMu.Lock()
@@ -205,7 +155,7 @@ func (s *Server) deliverOneShot(ctx context.Context, pass, cmd string) {
 	stop := s.typingOwner(ctx)
 	buf := &streamBuf{}
 	finish := s.streamProgress(buf)
-	out, err := runOneShot(ctx, pass, cmd, defaultShell(), buf)
+	out, err := runOneShot(ctx, cmd, defaultShell(), buf)
 	stop()
 	if err != nil && strings.TrimSpace(out) == "" {
 		out = "⚠ " + err.Error()
@@ -216,22 +166,16 @@ func (s *Server) deliverOneShot(ctx context.Context, pass, cmd string) {
 	finish(out)
 }
 
-// runOneShot runs one command via bash and returns the same prompt-prefixed
-// reply as the persistent shell (📁 cwd (branch), plus output and [exit N]). A
-// leading `sudo` is rewritten to read the piped password; a mid-pipeline sudo is
-// left as-is (it fails with a clear tty error — use /terminal for those).
-func runOneShot(ctx context.Context, pass, cmd, shell string, w io.Writer) (string, error) {
+// runOneShot runs one command via the shell and returns the same
+// prompt-prefixed reply as the persistent shell (📁 cwd (branch), plus output
+// and [exit N]). Runs unprivileged; the caller has already refused sudo.
+func runOneShot(ctx context.Context, cmd, shell string, w io.Writer) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, oneShotTimeout)
 	defer cancel()
-	if pass != "" && strings.HasPrefix(cmd, "sudo ") {
-		cmd = "sudo -k -S -p '' " + strings.TrimPrefix(cmd, "sudo ")
-	}
 	nonce := newNonce()
 	full := cmd + "\n" + shellProbe(shell, nonce) + "\n"
 	c := exec.CommandContext(ctx, shell, "-c", full)
-	if pass != "" {
-		c.Stdin = strings.NewReader(pass + "\n")
-	}
+	c.Env = childEnv()
 	var raw bytes.Buffer
 	mw := io.MultiWriter(&raw, w)
 	c.Stdout, c.Stderr = mw, mw
@@ -254,21 +198,10 @@ func groupInterrupt(c *exec.Cmd) {
 	c.WaitDelay = 10 * time.Second
 }
 
-// validateSudo checks the password before opening the persistent shell, so a
-// wrong one is rejected cleanly instead of corrupting the command stream.
-func validateSudo(ctx context.Context, pass string) bool {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	c := exec.CommandContext(ctx, "sudo", "-k", "-S", "-p", "", "true")
-	c.Stdin = strings.NewReader(pass + "\n")
-	return c.Run() == nil
-}
-
-// startTerminal opens a /terminal session on the user's login shell, running as
-// the service user (password already validated, cached for sudo -A). bash/zsh
-// get a persistent process; fish gets a per-command session (see termSession).
-// Either way one worker drains it.
-func (s *Server) startTerminal(pass string) (*termSession, error) {
+// startTerminal opens a /terminal session on the user's login shell, running
+// as the service user. bash/zsh get a persistent process; fish gets a
+// per-command session (see termSession). Either way one worker drains it.
+func (s *Server) startTerminal() (*termSession, error) {
 	shell := defaultShell()
 	var ts *termSession
 	if filepath.Base(shell) == "fish" {
@@ -276,15 +209,14 @@ func (s *Server) startTerminal(pass string) (*termSession, error) {
 		if err != nil {
 			cwd = "/"
 		}
-		ts = &termSession{shell: shell, cwd: cwd, pass: pass, cmds: make(chan string, 64), nonce: newNonce()}
+		ts = &termSession{shell: shell, cwd: cwd, cmds: make(chan string, 64), nonce: newNonce()}
 	} else {
 		var err error
-		ts, err = newShell(sudoEnv(pass), shell)
+		ts, err = newShell(childEnv(), shell)
 		if err != nil {
 			return nil, err
 		}
 		ts.shell = shell
-		ts.pass = pass
 	}
 	ts.idle = time.AfterFunc(termIdleTTL, func() { s.expireTerminal(ts) })
 	cwd := ts.cwd
@@ -296,42 +228,6 @@ func (s *Server) startTerminal(pass string) (*termSession, error) {
 	s.termMu.Unlock()
 	go s.termWorker(ts)
 	return ts, nil
-}
-
-// askpass caches a tiny SUDO_ASKPASS helper that echoes $OMNI_ASKPASS_PW, so
-// `sudo -A` gets the password with no tty and no password on disk (it lives only
-// in the shell process's environment).
-var (
-	askpassOnce sync.Once
-	askpassPath string
-	askpassErr  error
-)
-
-func askpassScript() (string, error) {
-	askpassOnce.Do(func() {
-		askpassPath = filepath.Join(os.TempDir(), "omni-askpass.sh")
-		askpassErr = os.WriteFile(askpassPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$OMNI_ASKPASS_PW\"\n"), 0o700)
-	})
-	return askpassPath, askpassErr
-}
-
-// sudoEnv is the process env for a terminal command run as the user: the normal
-// environment plus the askpass wiring that feeds the cached password to sudo -A.
-func sudoEnv(pass string) []string {
-	env := os.Environ()
-	if s, err := askpassScript(); err == nil {
-		env = append(env, "SUDO_ASKPASS="+s, "OMNI_ASKPASS_PW="+pass)
-	}
-	return env
-}
-
-// autoSudo turns a leading `sudo` into `sudo -A` so it authenticates via the
-// askpass helper (cached password) instead of prompting on a tty we don't have.
-func autoSudo(cmd string) string {
-	if strings.HasPrefix(cmd, "sudo ") {
-		return "sudo -A " + strings.TrimPrefix(cmd, "sudo ")
-	}
-	return cmd
 }
 
 // defaultShell resolves the service user's login shell (fish/bash/zsh/…) so
@@ -429,7 +325,6 @@ func (s *Server) termWorker(ts *termSession) {
 	if ts.idle != nil {
 		ts.idle.Stop()
 	}
-	ts.pass = "" // drop the cached fish password
 	s.termMu.Lock()
 	if s.term == ts {
 		s.term = nil
@@ -442,7 +337,7 @@ func (s *Server) termWorker(ts *termSession) {
 }
 
 // exec runs one command in the session: the persistent shell (bash/zsh) or a
-// fresh `sudo fish -c` (fish). alive=false ends the session; pwd is the cwd
+// fresh `fish -c` (fish). alive=false ends the session; pwd is the cwd
 // the sentinel reported ("" when the shell died). w sees the output live.
 func (ts *termSession) exec(ctx context.Context, cmd string, w io.Writer) (out, pwd string, alive bool) {
 	if ts.cmd != nil {
@@ -454,14 +349,14 @@ func (ts *termSession) exec(ctx context.Context, cmd string, w io.Writer) (out, 
 
 // runOnce runs one fish command as the user in a fresh `fish -c` (fish can't be
 // a persistent piped shell). cwd is carried between commands; env vars and
-// background jobs do not persist. `sudo` is auto-authenticated via SUDO_ASKPASS.
+// background jobs do not persist.
 func (ts *termSession) runOnce(ctx context.Context, cmd string, w io.Writer) (out, pwd string) {
 	ctx, cancel := context.WithTimeout(ctx, oneShotTimeout)
 	defer cancel()
-	full := autoSudo(cmd) + "\n" + shellProbe(ts.shell, ts.nonce)
+	full := cmd + "\n" + shellProbe(ts.shell, ts.nonce)
 	c := exec.CommandContext(ctx, ts.shell, "-c", full)
 	c.Dir = ts.cwd
-	c.Env = sudoEnv(ts.pass)
+	c.Env = childEnv()
 	var raw bytes.Buffer
 	mw := io.MultiWriter(&raw, w)
 	c.Stdout, c.Stderr = mw, mw
@@ -485,7 +380,7 @@ func (ts *termSession) runOnce(ctx context.Context, cmd string, w io.Writer) (ou
 // with a prompt line (📁 dev/omni (branch)) so the user can locate themselves.
 // alive=false means the shell died (EOF before the sentinel, e.g. `exit`).
 func (ts *termSession) run(cmd string, w io.Writer) (out, pwd string, alive bool) {
-	probe := autoSudo(cmd) + "\n" + shellProbe(ts.shell, ts.nonce) + "\n"
+	probe := cmd + "\n" + shellProbe(ts.shell, ts.nonce) + "\n"
 	if _, err := io.WriteString(ts.stdin, probe); err != nil {
 		return "⚠ shell write failed: " + err.Error(), "", false
 	}

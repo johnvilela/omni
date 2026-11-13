@@ -15,6 +15,7 @@ func newTestServer(t *testing.T) (*Server, *Store) {
 	// isolate token sources
 	t.Setenv("TELEGRAM_BOT_TOKEN", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("OMNI_API_TOKEN", testAPIToken)
 
 	// fake telegram: token GOOD works, anything else is unauthorized
 	mux := http.NewServeMux()
@@ -53,6 +54,8 @@ func doJSON(t *testing.T, h http.Handler, method, path, body string) (int, map[s
 		rd = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, path, rd)
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	raw := w.Body.Bytes()

@@ -6,13 +6,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	omniversion "omni/version"
 )
 
 // app and defaultAddr are overridable at build time via -ldflags -X so a dev
 // install (omni-dev, :8788) can coexist with prod without sharing port,
-// config or db. The version is omni-wide, shared with the cli.
+// config or db. A bare ":port" binds loopback outside the container, see
+// listenAddr. The version is omni-wide, shared with the cli.
 var (
 	app         = "omni"
 	defaultAddr = ":8787"
@@ -59,10 +61,15 @@ func main() {
 	srv.resumeTasks() // long tasks resume from their checkpoints
 	go srv.runCrons(context.Background())
 
-	addr := os.Getenv("OMNI_ADDR")
-	if addr == "" {
-		addr = defaultAddr
+	addr := listenAddr()
+	log.Printf("%s server %s listening on %s; %s", app, version, addr, apiTokenHint())
+	hs := &http.Server{
+		Addr:              addr,
+		Handler:           http.MaxBytesHandler(srv.Handler(), 1<<20),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
-	log.Printf("%s server %s listening on %s", app, version, addr)
-	log.Fatal(http.ListenAndServe(addr, srv.Handler()))
+	log.Fatal(hs.ListenAndServe())
 }

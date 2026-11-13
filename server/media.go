@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -42,12 +43,12 @@ func (s *Server) gatedFile(ctx context.Context, fromID int64, f tgFile) tgReply 
 // saveInbox downloads one telegram file into filesDir()/inbox with a
 // timestamp-prefixed sanitized name; returns the absolute path.
 func saveInbox(ctx context.Context, tg *Telegram, f tgFile) (string, error) {
-	base := filesDir()
-	if base == "" {
-		return "", fmt.Errorf("inbox: cannot resolve config dir")
+	root, base, err := openFilesRoot()
+	if err != nil {
+		return "", fmt.Errorf("inbox: %w", err)
 	}
-	dir := filepath.Join(base, "inbox")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	defer root.Close()
+	if err := root.MkdirAll("inbox", 0o700); err != nil {
 		return "", err
 	}
 	name := sanitizeName(f.Name)
@@ -55,17 +56,26 @@ func saveInbox(ctx context.Context, tg *Telegram, f tgFile) (string, error) {
 		name = "photo.jpg" // telegram photos are always jpeg
 	}
 	stem := time.Now().Format("20060102-150405") + "-"
-	path := filepath.Join(dir, stem+name)
+	rel := filepath.Join("inbox", stem+name)
 	for n := 2; ; n++ { // albums land several photos in the same second
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, err := root.Lstat(rel); os.IsNotExist(err) {
 			break
 		}
-		path = filepath.Join(dir, fmt.Sprintf("%s%d-%s", stem, n, name))
+		rel = filepath.Join("inbox", fmt.Sprintf("%s%d-%s", stem, n, name))
 	}
-	if err := tg.downloadFile(ctx, f.ID, path); err != nil {
+	out, err := root.Create(rel)
+	if err != nil {
 		return "", err
 	}
-	return path, nil
+	if err := tg.downloadFile(ctx, f.ID, out); err != nil {
+		out.Close()
+		root.Remove(rel) // no partial files in the inbox
+		return "", err
+	}
+	if err := out.Close(); err != nil {
+		return "", err
+	}
+	return filepath.Join(base, rel), nil
 }
 
 // sanitizeName reduces a client-supplied filename to a safe basename;
@@ -130,13 +140,29 @@ func filesDir() string {
 	return filepath.Join(dir, app, "files")
 }
 
-// resolveJailed confines a chat tool path to filesDir: relative paths join
-// it, absolute ones must already live inside, ".." escapes are refused.
-func resolveJailed(path string) (string, error) {
+// openFilesRoot opens filesDir as an os.Root: every file operation through
+// it is confined by the kernel (openat + no symlink escape), not by string
+// comparison, so a symlink planted inside the folder cannot reach outside.
+// The caller closes it. base is the absolute dir for display.
+func openFilesRoot() (*os.Root, string, error) {
 	base := filesDir()
 	if base == "" {
-		return "", fmt.Errorf("cannot resolve config dir")
+		return nil, "", fmt.Errorf("cannot resolve config dir")
 	}
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return nil, "", err
+	}
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return nil, "", err
+	}
+	return root, base, nil
+}
+
+// jailRel turns a chat tool path into a path relative to filesDir: relative
+// paths are taken as-is, absolute ones must already live inside, ".." escapes
+// are refused lexically here and by os.Root again at open time.
+func jailRel(base, path string) (string, error) {
 	p := path
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(base, p)
@@ -145,20 +171,38 @@ func resolveJailed(path string) (string, error) {
 	if p != base && !strings.HasPrefix(p, base+string(filepath.Separator)) {
 		return "", fmt.Errorf("path outside %s", base)
 	}
-	return p, nil
+	rel, err := filepath.Rel(base, p)
+	if err != nil {
+		return "", fmt.Errorf("path outside %s", base)
+	}
+	return rel, nil
 }
 
-// resolveWorkspace anchors agent-mode send paths: absolute anywhere (the
-// agent has full PC control already), relative in its cwd, the workspace.
-func resolveWorkspace(path string) (string, error) {
+// openJailed is the chat send_file opener: through the files root.
+func openJailed(path string) (*os.File, error) {
+	root, base, err := openFilesRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	rel, err := jailRel(base, path)
+	if err != nil {
+		return nil, err
+	}
+	return root.Open(rel)
+}
+
+// openWorkspace is the agent-mode send_file opener: absolute anywhere (the
+// agent already has that reach), relative in its cwd, the workspace.
+func openWorkspace(path string) (*os.File, error) {
 	if filepath.IsAbs(path) {
-		return path, nil
+		return os.Open(path)
 	}
 	base := agentDir()
 	if base == "" {
-		return "", fmt.Errorf("cannot resolve home")
+		return nil, fmt.Errorf("cannot resolve home")
 	}
-	return filepath.Join(base, path), nil
+	return os.Open(filepath.Join(base, path))
 }
 
 // fileTool executes one chat-mode file tool, returning the confirmation that
@@ -166,7 +210,7 @@ func resolveWorkspace(path string) (string, error) {
 // stays inside the one owner-visible omni folder.
 func (s *Server) fileTool(ctx context.Context, name, args string) string {
 	if name == "send_file" {
-		return s.sendFile(ctx, args, resolveJailed)
+		return s.sendFile(ctx, args, openJailed)
 	}
 	var a struct{ Path, Content, Find, Replace, Question string }
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
@@ -175,21 +219,29 @@ func (s *Server) fileTool(ctx context.Context, name, args string) string {
 	if a.Path == "" {
 		return "⚠ " + name + ": path required"
 	}
-	path, err := resolveJailed(a.Path)
+	root, base, err := openFilesRoot()
 	if err != nil {
 		return "⚠ " + name + ": " + err.Error()
 	}
+	defer root.Close()
+	rel, err := jailRel(base, a.Path)
+	if err != nil {
+		return "⚠ " + name + ": " + err.Error()
+	}
+	path := filepath.Join(base, rel) // display only; every op below goes through root
 	switch name {
 	case "write_file":
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return "⚠ write_file: " + err.Error()
+		if dir := filepath.Dir(rel); dir != "." {
+			if err := root.MkdirAll(dir, 0o700); err != nil {
+				return "⚠ write_file: " + err.Error()
+			}
 		}
-		if err := os.WriteFile(path, []byte(a.Content), 0o644); err != nil {
+		if err := root.WriteFile(rel, []byte(a.Content), 0o644); err != nil {
 			return "⚠ write_file: " + err.Error()
 		}
 		return fmt.Sprintf("📝 wrote %s (%d bytes)", path, len(a.Content))
 	case "read_file":
-		raw, err := os.ReadFile(path)
+		raw, err := root.ReadFile(rel)
 		if err != nil {
 			return "⚠ read_file: " + err.Error()
 		}
@@ -208,7 +260,7 @@ func (s *Server) fileTool(ctx context.Context, name, args string) string {
 		if a.Find == "" {
 			return "⚠ edit_file: find required"
 		}
-		raw, err := os.ReadFile(path)
+		raw, err := root.ReadFile(rel)
 		if err != nil {
 			return "⚠ edit_file: " + err.Error()
 		}
@@ -216,29 +268,58 @@ func (s *Server) fileTool(ctx context.Context, name, args string) string {
 		if n == 0 {
 			return "⚠ edit_file: text not found in " + path
 		}
-		if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), a.Find, a.Replace)), 0o644); err != nil {
+		if err := root.WriteFile(rel, []byte(strings.ReplaceAll(string(raw), a.Find, a.Replace)), 0o644); err != nil {
 			return "⚠ edit_file: " + err.Error()
 		}
 		return fmt.Sprintf("✏ %s: %d replacement(s)", path, n)
 	case "delete_file":
-		fi, err := os.Stat(path)
+		fi, err := root.Lstat(rel) // Lstat: a symlink is "not a regular file", not followed
 		if err != nil {
 			return "⚠ delete_file: " + err.Error()
 		}
 		if !fi.Mode().IsRegular() {
 			return "⚠ delete_file: not a regular file: " + path
 		}
-		if err := os.Remove(path); err != nil {
+		if err := root.Remove(rel); err != nil {
 			return "⚠ delete_file: " + err.Error()
 		}
 		return "🗑 deleted " + path
 	case "analyze_file":
-		if _, err := os.Stat(path); err != nil {
+		// the path goes to an external agent as text, so os.Root cannot
+		// guard the read: resolve symlinks and require the real file to sit
+		// under the real files dir
+		real, err := realInside(base, path)
+		if err != nil {
 			return "⚠ analyze_file: " + err.Error()
 		}
-		return s.analyzeFile(ctx, path, a.Question)
+		return s.analyzeFile(ctx, real, a.Question)
 	}
 	return "⚠ unknown tool " + name
+}
+
+// realInside resolves every symlink in path and checks the result still
+// lives under base (also symlink-resolved). Used only where a path string
+// leaves the process; everything else goes through os.Root.
+func realInside(base, path string) (string, error) {
+	realBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	if real != realBase && !strings.HasPrefix(real, realBase+string(filepath.Separator)) {
+		return "", fmt.Errorf("path outside %s", base)
+	}
+	fi, err := os.Stat(real)
+	if err != nil {
+		return "", err
+	}
+	if !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("not a regular file: %s", path)
+	}
+	return real, nil
 }
 
 // analyzeFile answers a question about one file the chat llm cannot read
@@ -312,7 +393,7 @@ func (s *Server) applySendFile(ctx context.Context, reply string) string {
 		if !ok || name != "TOOL:send_file" {
 			continue
 		}
-		lines[i] = s.sendFile(ctx, args, resolveWorkspace)
+		lines[i] = s.sendFile(ctx, args, openWorkspace)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
@@ -320,19 +401,23 @@ func (s *Server) applySendFile(ctx context.Context, reply string) string {
 // sendFile uploads one local file to every approved chat: images as photos,
 // everything else as documents; a failed photo retries as a document
 // (>10MB or odd dimensions). Returns the confirmation replacing the TOOL
-// line. resolve sets the caller's path rules: jailed for chat, workspace for
-// agents.
-func (s *Server) sendFile(ctx context.Context, args string, resolve func(string) (string, error)) string {
+// line. open sets the caller's path rules: jailed for chat, workspace for
+// agents; the opened file (not its path) is what gets uploaded, so a check
+// here cannot be raced by swapping the path underneath.
+func (s *Server) sendFile(ctx context.Context, args string, open func(string) (*os.File, error)) string {
 	var a struct{ Path string }
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "⚠ bad tool arguments: " + err.Error()
 	}
-	path, err := resolve(a.Path)
+	f, err := open(a.Path)
 	if err != nil {
-		return "⚠ send_file: " + err.Error()
+		if strings.Contains(err.Error(), "path outside") {
+			return "⚠ send_file: " + err.Error()
+		}
+		return "⚠ send_file: not a file: " + a.Path
 	}
-	a.Path = path
-	fi, err := os.Stat(a.Path)
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() {
 		return "⚠ send_file: not a file: " + a.Path
 	}
@@ -347,11 +432,14 @@ func (s *Server) sendFile(ctx context.Context, args string, resolve func(string)
 	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
 		method, field = "sendPhoto", "photo"
 	}
+	name := filepath.Base(a.Path)
 	for _, id := range s.ownerChats() {
-		err := tg.upload(ctx, method, field, id, a.Path)
+		f.Seek(0, io.SeekStart)
+		err := tg.upload(ctx, method, field, id, name, f)
 		if err != nil && method == "sendPhoto" {
 			log.Printf("send_file: photo chat %d: %v — retrying as document", id, err)
-			err = tg.upload(ctx, "sendDocument", "document", id, a.Path)
+			f.Seek(0, io.SeekStart)
+			err = tg.upload(ctx, "sendDocument", "document", id, name, f)
 		}
 		if err != nil {
 			return "⚠ send_file: " + err.Error()

@@ -59,9 +59,10 @@ func readLines(t *testing.T, path string) []string {
 	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
 }
 
-// TestAgentAnswerClaude locks the un-bare agent contract: full permissions,
-// user settings loaded (no bare-mode flags), raw text through, session id
-// captured and refreshed on every turn, exchange logged to sqlite.
+// TestAgentAnswerClaude locks the un-bare agent contract: restricted
+// permissions by default (vendor sandbox, no prompts, tool allowlist), user
+// settings loaded (no bare-mode flags), raw text through, session id captured
+// and refreshed on every turn, exchange logged to sqlite.
 func TestAgentAnswerClaude(t *testing.T) {
 	srv, store := newLLMTestServer(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
@@ -74,9 +75,14 @@ func TestAgentAnswerClaude(t *testing.T) {
 	if reply != "pong" {
 		t.Fatalf("agent reply = %q; want pong", reply)
 	}
-	want := []string{"-p", "do the thing", "--output-format", "json", "--dangerously-skip-permissions"}
-	if got := readLines(t, argsFile); !slices.Equal(got, want) {
-		t.Fatalf("claude args = %q; want %q", got, want)
+	got0 := readLines(t, argsFile)
+	if got0[0] != "-p" || got0[1] != "do the thing" || slices.Contains(got0, "--dangerously-skip-permissions") {
+		t.Fatalf("claude args = %q; want restricted mode", got0)
+	}
+	for _, flag := range []string{"--permission-mode", "acceptEdits", "--permission-prompts", "none", "--allowedTools"} {
+		if !slices.Contains(got0, flag) {
+			t.Fatalf("claude args = %q; missing %s", got0, flag)
+		}
 	}
 	if got := readLines(t, pwdFile); got[0] != agentDir() {
 		t.Fatalf("cwd = %q; want %q", got[0], agentDir())
@@ -120,7 +126,8 @@ func TestAgentAnswerCodex(t *testing.T) {
 	} else {
 		got = slices.Delete(got, i, i+2)
 	}
-	want := []string{"exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--json", "do the thing"}
+	want := []string{"exec", "--skip-git-repo-check", "-s", "workspace-write", "-a", "never",
+		"-c", "sandbox_workspace_write.network_access=true", "--json", "do the thing"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("codex args = %q; want %q", got, want)
 	}
@@ -347,9 +354,9 @@ func TestAgentAnswerClaudeMCPConfig(t *testing.T) {
 	if reply := srv.agentAnswer(context.Background(), sess, "hi"); reply != "pong" {
 		t.Fatalf("reply = %q", reply)
 	}
-	want := []string{"-p", "hi", "--output-format", "json", "--dangerously-skip-permissions", "--mcp-config", mcp}
-	if got := readLines(t, argsFile); !slices.Equal(got, want) {
-		t.Fatalf("claude args = %q; want %q", got, want)
+	got := readLines(t, argsFile)
+	if i := slices.Index(got, "--mcp-config"); i < 0 || got[i+1] != mcp {
+		t.Fatalf("claude args = %q; want --mcp-config %s", got, mcp)
 	}
 }
 

@@ -110,10 +110,16 @@ func TestOpsUpdateKicksGuardian(t *testing.T) {
 
 func TestOpsTerminalEntry(t *testing.T) {
 	srv, _ := newUpdateTestServer(t)
-	if r := srv.gatedCallback(context.Background(), 42, "ops:terminal"); !strings.Contains(r.Text, "sudo password") {
-		t.Fatalf("entry = %q", r.Text)
+	r := srv.gatedCallback(context.Background(), 42, "ops:terminal")
+	if !strings.Contains(r.Text, "terminal mode") || strings.Contains(r.Text, "password") {
+		t.Fatalf("entry = %q; want an open shell and no password prompt", r.Text)
 	}
-	// second tap while awaiting the password must not double-arm
+	t.Cleanup(func() {
+		if ts := srv.term; ts != nil {
+			srv.endTerminal(ts)
+		}
+	})
+	// second tap while the shell is open must not double-arm
 	if r := srv.gatedCallback(context.Background(), 42, "ops:terminal"); !strings.Contains(r.Text, "already") {
 		t.Fatalf("re-entry = %q", r.Text)
 	}

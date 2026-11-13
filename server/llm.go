@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,20 +163,25 @@ func modelsRequest(ctx context.Context, provider, key string) (*http.Request, er
 		}
 		return req, err
 	case "gemini":
-		return http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1beta/models?key="+url.QueryEscape(key), nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1beta/models", nil)
+		if err == nil {
+			req.Header.Set("x-goog-api-key", key) // never in the URL: transport errors print it
+		}
+		return req, err
 	}
 	return nil, fmt.Errorf("unknown provider %q", provider)
 }
 
 // validateLLMKey checks an api key by listing models.
 func validateLLMKey(ctx context.Context, provider, key string) error {
+	registerSecret(key)
 	req, err := modelsRequest(ctx, provider, key)
 	if err != nil {
 		return err
 	}
 	resp, err := llmHTTP.Do(req)
 	if err != nil {
-		return err
+		return redactErr(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

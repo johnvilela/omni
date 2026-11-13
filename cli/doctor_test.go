@@ -106,6 +106,7 @@ func TestServerChecks(t *testing.T) {
 			w.WriteHeader(404)
 		}
 	}))
+	t.Setenv("OMNI_API_TOKEN", "t")
 	c := &Client{Base: srv.URL, http: &http.Client{Timeout: 5 * time.Second}}
 	if cs := serverChecks(c); failCount(cs) != 0 {
 		t.Errorf("healthy server = %+v, want no failures", cs)

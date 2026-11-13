@@ -9,9 +9,8 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -29,7 +28,7 @@ type tgReply struct {
 	Keyboard      [][]button
 	Edit          bool // replace the tapped message (text + keyboard) instead of sending a new one
 	StripKeyboard bool // remove the tapped message's now-stale buttons, then send Text as usual
-	DeleteInbound bool // delete the message that triggered this reply (a sudo password, a /clear)
+	DeleteInbound bool // delete the message that triggered this reply (a /clear, a /new)
 }
 
 // tgFile is one inbound photo/document's metadata — no bytes; the download
@@ -71,6 +70,7 @@ func sentID(raw json.RawMessage) int64 {
 }
 
 func NewTelegram(apiBase, token string) *Telegram {
+	registerSecret(token)
 	return &Telegram{
 		base:    apiBase + "/bot" + token,
 		apiBase: apiBase,
@@ -115,6 +115,17 @@ type update struct {
 	} `json:"callback_query"`
 }
 
+// do is the one place Telegram requests leave: a transport error's text
+// carries the request URL, and the URL carries the bot token, so the error is
+// scrubbed here before anyone logs it or sends it to chat.
+func (t *Telegram) do(req *http.Request) (*http.Response, error) {
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return nil, &redactedError{msg: strings.ReplaceAll(redactSecrets(err.Error()), t.token, "***"), err: err}
+	}
+	return resp, nil
+}
+
 type apiResponse struct {
 	OK          bool            `json:"ok"`
 	Description string          `json:"description"`
@@ -133,7 +144,7 @@ func (t *Telegram) call(ctx context.Context, method string, body any, out any) e
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := t.client.Do(req)
+	resp, err := t.do(req)
 	if err != nil {
 		return err
 	}
@@ -234,9 +245,10 @@ func (t *Telegram) deleteMessages(ctx context.Context, chatID int64, ids []int64
 	return t.call(ctx, "deleteMessages", map[string]any{"chat_id": chatID, "message_ids": ids}, nil)
 }
 
-// downloadFile resolves a file_id via getFile and streams the bytes to dest.
-// Telegram caps getFile at 20MB — bigger files just surface its error.
-func (t *Telegram) downloadFile(ctx context.Context, fileID, dest string) error {
+// downloadFile resolves a file_id via getFile and streams the bytes into out
+// (the caller owns the file: it creates it inside the jail and removes it on
+// error). Telegram caps getFile at 20MB — bigger files just surface its error.
+func (t *Telegram) downloadFile(ctx context.Context, fileID string, out io.Writer) error {
 	var f struct {
 		FilePath string `json:"file_path"`
 	}
@@ -247,7 +259,7 @@ func (t *Telegram) downloadFile(ctx context.Context, fileID, dest string) error 
 	if err != nil {
 		return err
 	}
-	resp, err := t.client.Do(req)
+	resp, err := t.do(req)
 	if err != nil {
 		return err
 	}
@@ -255,31 +267,18 @@ func (t *Telegram) downloadFile(ctx context.Context, fileID, dest string) error 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("telegram file download: %s", resp.Status)
 	}
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		out.Close()
-		os.Remove(dest) // no partial files in the inbox
-		return err
-	}
-	return out.Close()
+	_, err = io.Copy(out, resp.Body)
+	return err
 }
 
-// upload sends one local file via multipart; method/field are
-// sendPhoto/photo or sendDocument/document.
-func (t *Telegram) upload(ctx context.Context, method, field string, chatID int64, path string) error {
-	in, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
+// upload sends one already-open file via multipart under name; method/field
+// are sendPhoto/photo or sendDocument/document.
+func (t *Telegram) upload(ctx context.Context, method, field string, chatID int64, name string, in io.Reader) error {
 	// ponytail: whole file buffered (telegram caps uploads at 50MB); io.Pipe if it hurts
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	w.WriteField("chat_id", strconv.FormatInt(chatID, 10))
-	part, err := w.CreateFormFile(field, filepath.Base(path))
+	part, err := w.CreateFormFile(field, name)
 	if err != nil {
 		return err
 	}
@@ -294,7 +293,7 @@ func (t *Telegram) upload(ctx context.Context, method, field string, chatID int6
 		return err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	resp, err := t.client.Do(req)
+	resp, err := t.do(req)
 	if err != nil {
 		return err
 	}
@@ -402,7 +401,7 @@ func (t *Telegram) Poll(ctx context.Context) {
 			reply := t.answer(ctx, from, u.Message.Text)
 			stop()
 			if reply.DeleteInbound {
-				t.deleteMessage(ctx, u.Message.Chat.ID, u.Message.MessageID) // best-effort: keep the sudo password out of history
+				t.deleteMessage(ctx, u.Message.Chat.ID, u.Message.MessageID) // best-effort: keep the trigger out of history
 			} else {
 				t.track(u.Message.Chat.ID, u.Message.MessageID)
 			}
